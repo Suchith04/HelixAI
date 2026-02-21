@@ -28,6 +28,7 @@ export const authService = {
   login: (data) => api.post('/auth/login', data),
   register: (data) => api.post('/auth/register', data),
   getMe: () => api.get('/auth/me'),
+  updatePassword: (data) => api.put('/auth/password', data),
 };
 
 export const dashboardService = {
@@ -47,6 +48,7 @@ export const agentService = {
 export const incidentService = {
   getIncidents: (params) => api.get('/incidents', { params }),
   getIncident: (id) => api.get(`/incidents/${id}`),
+  getIncidentDetails: (id) => api.get(`/incidents/${id}/details`),
   updateIncident: (id, data) => api.put(`/incidents/${id}`, data),
   getStats: () => api.get('/incidents/stats'),
 };

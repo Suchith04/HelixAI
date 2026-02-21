@@ -76,9 +76,13 @@ export const login = async (req, res, next) => {
 };
 
 // Get current user
-export const getMe = async (req, res) => {
-  const user = await User.findById(req.user._id).populate('company');
-  res.json({ user });
+export const getMe = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id).populate('company');
+    res.json({ user });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // Update password

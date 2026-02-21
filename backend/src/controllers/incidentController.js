@@ -1,4 +1,5 @@
 import { Incident, LogEntry, Anomaly, Recovery } from '../models/index.js';
+import mongoose from 'mongoose';
 
 // Get all incidents
 export const getIncidents = async (req, res, next) => {
@@ -54,8 +55,9 @@ export const updateIncident = async (req, res, next) => {
 // Get incident stats using aggregation
 export const getIncidentStats = async (req, res, next) => {
   try {
+    const companyId = new mongoose.Types.ObjectId(req.companyId);
     const stats = await Incident.aggregate([
-      { $match: { company: req.companyId } },
+      { $match: { company: companyId } },
       {
         $facet: {
           byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],

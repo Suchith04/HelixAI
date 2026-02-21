@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bot, AlertTriangle, GitBranch, Settings, LogOut, Zap } from 'lucide-react';
+import { LayoutDashboard, Bot, AlertTriangle, GitBranch, Settings, LogOut, Zap, User } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 const navItems = [
@@ -12,13 +12,13 @@ const navItems = [
 
 const Sidebar = () => {
   const { pathname } = useLocation();
-  const { logout, company } = useAuth();
+  const { logout, company, user } = useAuth();
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-dark-900 border-r border-dark-700 flex flex-col">
       <div className="p-6 border-b border-dark-700">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-gradient-to-br from-primary-500 to-primary-700 rounded-lg">
+          <div className="p-2 bg-gradient-to-br from-primary-500 to-primary-700 rounded-lg animate-pulse-glow">
             <Zap className="w-6 h-6 text-white" />
           </div>
           <div>
@@ -28,7 +28,7 @@ const Sidebar = () => {
         </div>
       </div>
 
-      <nav className="flex-1 p-4 space-y-2">
+      <nav className="flex-1 p-4 space-y-1">
         {navItems.map(({ path, label, icon: Icon }) => (
           <Link
             key={path}
@@ -45,7 +45,19 @@ const Sidebar = () => {
         ))}
       </nav>
 
+      {/* User Profile Badge */}
       <div className="p-4 border-t border-dark-700">
+        {user && (
+          <div className="flex items-center gap-3 px-3 py-2 mb-2">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
+              <span className="text-white text-xs font-bold">{user.firstName?.[0]}{user.lastName?.[0]}</span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-white text-sm font-medium truncate">{user.firstName} {user.lastName}</p>
+              <p className="text-dark-500 text-xs truncate">{user.role}</p>
+            </div>
+          </div>
+        )}
         <button
           onClick={logout}
           className="flex items-center gap-3 w-full px-4 py-3 text-dark-400 hover:text-red-400 hover:bg-dark-800 rounded-lg transition-all"

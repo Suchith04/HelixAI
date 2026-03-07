@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { GitBranch, Play, Plus, Clock, CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronUp, BarChart3, ArrowRight } from 'lucide-react';
 import { workflowService } from '../services/api';
 
@@ -22,6 +23,7 @@ const StepPipeline = ({ steps }) => {
 };
 
 const Workflows = () => {
+  const navigate = useNavigate();
   const [workflows, setWorkflows] = useState([]);
   const [executions, setExecutions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,7 @@ const Workflows = () => {
           <h1 className="text-3xl font-bold text-white">Workflows</h1>
           <p className="text-dark-400 mt-1">Manage multi-agent automation workflows</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors">
+        <button onClick={() => navigate('/workflows/new')} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors">
           <Plus className="w-4 h-4" /> Create Workflow
         </button>
       </div>
@@ -95,7 +97,7 @@ const Workflows = () => {
       {/* Workflow Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {workflows.length > 0 ? workflows.map(workflow => (
-          <div key={workflow._id} className="glass-card p-6">
+          <div key={workflow._id} className="glass-card p-6 cursor-pointer" onClick={() => navigate(`/workflows/${workflow._id}`)}>
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-primary-500/20 rounded-lg"><GitBranch className="w-5 h-5 text-primary-400" /></div>
@@ -121,7 +123,7 @@ const Workflows = () => {
               </div>
             )}
 
-            <button onClick={() => handleExecute(workflow._id)} className="w-full flex items-center justify-center gap-2 py-2.5 mt-4 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors">
+            <button onClick={(e) => { e.stopPropagation(); handleExecute(workflow._id); }} className="w-full flex items-center justify-center gap-2 py-2.5 mt-4 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors">
               <Play className="w-4 h-4" /> Execute
             </button>
           </div>

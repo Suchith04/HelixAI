@@ -41,6 +41,17 @@ export const workflowValidation = [
   body('steps.*.action').notEmpty().withMessage('Action is required for each step'),
 ];
 
+export const graphWorkflowValidation = [
+  body('name').trim().notEmpty().withMessage('Workflow name is required'),
+  body('graph.nodes').isArray({ min: 1 }).withMessage('At least one node is required'),
+  body('graph.nodes.*.agent').notEmpty().withMessage('Agent is required for each node'),
+  body('graph.nodes.*.position.x').isNumeric().withMessage('Node x position is required'),
+  body('graph.nodes.*.position.y').isNumeric().withMessage('Node y position is required'),
+  body('graph.edges').isArray().withMessage('Edges must be an array'),
+  body('graph.edges.*.source').notEmpty().withMessage('Edge source is required'),
+  body('graph.edges.*.target').notEmpty().withMessage('Edge target is required'),
+];
+
 export const mongoIdValidation = [
   param('id').isMongoId().withMessage('Invalid ID format'),
 ];

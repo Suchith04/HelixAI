@@ -1,3 +1,4 @@
+import './App.css';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/layout/Layout';
@@ -7,6 +8,7 @@ import Register from './pages/Register';
 import Agents from './pages/Agents';
 import Incidents from './pages/Incidents';
 import Workflows from './pages/Workflows';
+import WorkflowBuilder from './pages/WorkflowBuilder';
 import Settings from './pages/Settings';
 
 const ProtectedRoute = ({ children }) => {
@@ -33,6 +35,8 @@ function App() {
             <Route path="agents" element={<Agents />} />
             <Route path="incidents" element={<Incidents />} />
             <Route path="workflows" element={<Workflows />} />
+            <Route path="workflows/new" element={<WorkflowBuilder />} />
+            <Route path="workflows/:id" element={<WorkflowBuilder />} />
             <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>

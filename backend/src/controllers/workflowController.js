@@ -1,6 +1,30 @@
 import { Workflow, WorkflowExecution } from '../models/index.js';
 import { getOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 
+// Cycle detection using DFS
+const hasCycle = (nodes, edges) => {
+  if (!nodes?.length || !edges?.length) return false;
+  const adj = {};
+  nodes.forEach(n => { adj[n.id] = []; });
+  edges.forEach(e => { if (adj[e.source]) adj[e.source].push(e.target); });
+
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const color = {};
+  nodes.forEach(n => { color[n.id] = WHITE; });
+
+  const dfs = (u) => {
+    color[u] = GRAY;
+    for (const v of (adj[u] || [])) {
+      if (color[v] === GRAY) return true;
+      if (color[v] === WHITE && dfs(v)) return true;
+    }
+    color[u] = BLACK;
+    return false;
+  };
+
+  return nodes.some(n => color[n.id] === WHITE && dfs(n.id));
+};
+
 // Get all workflows
 export const getWorkflows = async (req, res, next) => {
   try {
@@ -25,6 +49,9 @@ export const getWorkflow = async (req, res, next) => {
 // Create workflow
 export const createWorkflow = async (req, res, next) => {
   try {
+    if (req.body.graph && hasCycle(req.body.graph.nodes, req.body.graph.edges)) {
+      return res.status(400).json({ error: 'Circular dependency detected in workflow graph' });
+    }
     const workflow = await Workflow.create({ company: req.companyId, createdBy: req.user._id, ...req.body });
     res.status(201).json({ workflow });
   } catch (error) {
@@ -35,6 +62,9 @@ export const createWorkflow = async (req, res, next) => {
 // Update workflow
 export const updateWorkflow = async (req, res, next) => {
   try {
+    if (req.body.graph && hasCycle(req.body.graph.nodes, req.body.graph.edges)) {
+      return res.status(400).json({ error: 'Circular dependency detected in workflow graph' });
+    }
     const workflow = await Workflow.findOneAndUpdate(
       { company: req.companyId, _id: req.params.id, isSystem: false },
       { ...req.body, $inc: { version: 1 } },

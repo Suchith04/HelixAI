@@ -72,6 +72,22 @@ const workflowSchema = new mongoose.Schema({
     condition: String, // condition expression
   },
   steps: [workflowStepSchema],
+  graph: {
+    nodes: [{
+      id: { type: String, required: true },
+      agent: { type: String, required: true },
+      action: { type: String, default: 'process' },
+      position: {
+        x: { type: Number, required: true },
+        y: { type: Number, required: true },
+      },
+    }],
+    edges: [{
+      id: { type: String, required: true },
+      source: { type: String, required: true },
+      target: { type: String, required: true },
+    }],
+  },
   isActive: {
     type: Boolean,
     default: true,

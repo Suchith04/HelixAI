@@ -55,10 +55,15 @@ export const incidentService = {
 
 export const workflowService = {
   getWorkflows: () => api.get('/workflows'),
+  getWorkflow: (id) => api.get(`/workflows/${id}`),
   createWorkflow: (data) => api.post('/workflows', data),
+  createGraphWorkflow: (data) => api.post('/workflows/graph', data),
+  updateWorkflow: (id, data) => api.put(`/workflows/${id}`, data),
+  deleteWorkflow: (id) => api.delete(`/workflows/${id}`),
   executeWorkflow: (id, data) => api.post(`/workflows/${id}/execute`, data),
   getExecutions: () => api.get('/workflows/executions'),
 };
+
 
 export const companyService = {
   getCompany: () => api.get('/company'),

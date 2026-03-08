@@ -203,7 +203,7 @@ ${prompt}
     `.trim();
 
     try {
-      const response = await queryLLM(systemPrompt, fullPrompt);
+      const response = await queryLLM(systemPrompt, fullPrompt, { companyId: this.companyId });
       return response;
     } catch (error) {
       this.log(`LLM query failed: ${error.message}`, 'error');

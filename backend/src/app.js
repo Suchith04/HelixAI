@@ -10,7 +10,8 @@ import {
   agentRouter, 
   workflowRouter, 
   incidentRouter,
-  dashboardRouter 
+  dashboardRouter,
+  cloudwatchRouter 
 } from './routes/index.js';
 const app = express();
 
@@ -35,6 +36,7 @@ app.use('/api/agents',agentRouter);
 app.use('/api/workflows', workflowRouter);
 app.use('/api/incidents', incidentRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/cloudwatch', cloudwatchRouter);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building, Key, Cloud, Save, Shield, Server, Cpu, CheckCircle, XCircle, Lock, Eye, EyeOff } from 'lucide-react';
+import { Building, Key, Cloud, Save, Shield, Server, Cpu, CheckCircle, XCircle, Lock, Eye, EyeOff, Trash2, Star, Plus } from 'lucide-react';
 import { companyService, authService } from '../services/api';
 
 const ToggleSwitch = ({ active, onChange }) => (
@@ -22,10 +22,21 @@ const ConnectionStatus = ({ configured, label }) => (
   </div>
 );
 
+// Provider → model mapping
+const PROVIDER_MODELS = {
+  openai: { label: 'OpenAI (ChatGPT)', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
+  google: { label: 'Google Gemini', models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'] },
+  anthropic: { label: 'Anthropic Claude (Paid)', models: ['claude-3.5-sonnet', 'claude-3-opus', 'claude-3-haiku'] },
+  groq: { label: 'Groq (Free Tier)', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'] },
+};
+
 const Settings = () => {
   const [company, setCompany] = useState(null);
   const [awsCreds, setAwsCreds] = useState({ accessKeyId: '', secretAccessKey: '', region: 'us-east-1' });
+  const [awsDisplay, setAwsDisplay] = useState(null); // masked or decrypted creds display
+  const [awsDecrypted, setAwsDecrypted] = useState(false);
   const [llmKey, setLlmKey] = useState({ apiKey: '', provider: 'openai', model: 'gpt-4o-mini' });
+  const [llmConfigs, setLlmConfigs] = useState([]);
   const [passwordData, setPasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [showPasswords, setShowPasswords] = useState({ current: false, new: false });
   const [saving, setSaving] = useState(false);
@@ -39,6 +50,7 @@ const Settings = () => {
   };
 
   useEffect(() => {
+    // Load company
     companyService.getCompany()
       .then(res => {
         const c = res.data.company;
@@ -47,7 +59,27 @@ const Settings = () => {
         if (c?.agentSettings) setAgentSettings(c.agentSettings);
       })
       .catch(console.error);
+
+    // Load LLM configs
+    companyService.getLlmConfigs()
+      .then(res => setLlmConfigs(res.data.configs || []))
+      .catch(console.error);
+
+    // Load masked AWS credentials
+    companyService.getAwsCredentials()
+      .then(res => {
+        if (res.data.configured) {
+          setAwsDisplay(res.data.credentials);
+        }
+      })
+      .catch(console.error);
   }, []);
+
+  // Update model when provider changes
+  const handleProviderChange = (provider) => {
+    const firstModel = PROVIDER_MODELS[provider]?.models[0] || '';
+    setLlmKey({ ...llmKey, provider, model: firstModel });
+  };
 
   const handleSaveAws = async () => {
     setSaving(true);
@@ -55,18 +87,69 @@ const Settings = () => {
       await companyService.setAwsCredentials(awsCreds);
       showMessage('AWS credentials saved successfully!');
       setAwsCreds({ accessKeyId: '', secretAccessKey: '', region: awsCreds.region });
+      // Refresh masked display
+      const res = await companyService.getAwsCredentials();
+      if (res.data.configured) {
+        setAwsDisplay(res.data.credentials);
+        setAwsDecrypted(false);
+      }
+      // Refresh company to update status badge
+      const companyRes = await companyService.getCompany();
+      setCompany(companyRes.data.company);
     } catch (e) { showMessage(e.response?.data?.error || 'Failed to save AWS credentials', 'error'); }
     finally { setSaving(false); }
   };
 
-  const handleSaveLlm = async () => {
+  const handleDecryptAws = async () => {
+    try {
+      const res = await companyService.decryptAwsCredentials();
+      if (res.data.configured) {
+        setAwsDisplay(res.data.credentials);
+        setAwsDecrypted(true);
+      }
+    } catch (e) { showMessage(e.response?.data?.error || 'Failed to decrypt credentials', 'error'); }
+  };
+
+  const handleHideAws = async () => {
+    try {
+      const res = await companyService.getAwsCredentials();
+      if (res.data.configured) {
+        setAwsDisplay(res.data.credentials);
+        setAwsDecrypted(false);
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const handleSaveLlmConfig = async () => {
     setSaving(true);
     try {
-      await companyService.setLlmKey(llmKey);
-      showMessage('LLM API key saved successfully!');
+      const res = await companyService.saveLlmConfig(llmKey);
+      showMessage('LLM configuration saved successfully!');
+      setLlmConfigs(res.data.configs || []);
       setLlmKey({ ...llmKey, apiKey: '' });
-    } catch (e) { showMessage(e.response?.data?.error || 'Failed to save LLM key', 'error'); }
+      // Refresh company to update status
+      const companyRes = await companyService.getCompany();
+      setCompany(companyRes.data.company);
+    } catch (e) { showMessage(e.response?.data?.error || 'Failed to save LLM config', 'error'); }
     finally { setSaving(false); }
+  };
+
+  const handleSetActiveLlm = async (index) => {
+    try {
+      const res = await companyService.setActiveLlmConfig({ index });
+      setLlmConfigs(res.data.configs || []);
+      showMessage('Active LLM model updated!');
+    } catch (e) { showMessage(e.response?.data?.error || 'Failed to set active config', 'error'); }
+  };
+
+  const handleDeleteLlmConfig = async (index) => {
+    try {
+      const res = await companyService.deleteLlmConfig(index);
+      setLlmConfigs(res.data.configs || []);
+      showMessage('LLM configuration removed');
+      const companyRes = await companyService.getCompany();
+      setCompany(companyRes.data.company);
+    } catch (e) { showMessage(e.response?.data?.error || 'Failed to delete config', 'error'); }
   };
 
   const handleChangePassword = async () => {
@@ -103,6 +186,11 @@ const Settings = () => {
       ? agentSettings.enabledAgents.filter(a => a !== agentName)
       : [...(agentSettings.enabledAgents || []), agentName];
     setAgentSettings({ ...agentSettings, enabledAgents: newEnabled });
+  };
+
+  const providerIcon = (provider) => {
+    const icons = { openai: '🤖', google: '🔷', anthropic: '🟠', groq: '⚡' };
+    return icons[provider] || '🤖';
   };
 
   return (
@@ -163,7 +251,48 @@ const Settings = () => {
           </div>
           <ConnectionStatus configured={company?.awsCredentials?.isConfigured} />
         </div>
+
+        {/* Display saved credentials (masked or decrypted) */}
+        {awsDisplay && (
+          <div className="mb-6 p-4 bg-dark-800/60 border border-dark-600 rounded-xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-white text-sm font-medium">Saved Credentials</h3>
+              {awsDecrypted ? (
+                <button onClick={handleHideAws} className="flex items-center gap-1.5 px-3 py-1.5 bg-dark-700 text-dark-300 rounded-lg hover:bg-dark-600 transition-colors text-xs">
+                  <EyeOff className="w-3.5 h-3.5" /> Hide
+                </button>
+              ) : (
+                <button onClick={handleDecryptAws} className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500/20 text-orange-400 rounded-lg hover:bg-orange-500/30 transition-colors text-xs">
+                  <Eye className="w-3.5 h-3.5" /> Decrypt
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-dark-500 text-xs mb-1">Access Key ID</label>
+                <div className={`px-3 py-2 bg-dark-900 overflow-auto rounded-lg text-sm font-mono ${awsDecrypted ? 'text-orange-300' : 'text-dark-300'}`}>
+                  {awsDisplay.accessKeyId}
+                </div>
+              </div>
+              <div>
+                <label className="block text-dark-500 text-xs mb-1">Secret Access Key</label>
+                <div className={`px-3 py-2 bg-dark-900 overflow-hidden rounded-lg text-sm font-mono ${awsDecrypted ? 'text-orange-300' : 'text-dark-300'}`}>
+                  {awsDisplay.secretAccessKey}
+                </div>
+              </div>
+              <div>
+                <label className="block text-dark-500 text-xs mb-1">Region</label>
+                <div className="px-3 py-2 bg-dark-900 rounded-lg text-dark-300 text-sm font-mono">
+                  {awsDisplay.region}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Form to update credentials */}
         <div className="space-y-4">
+          <p className="text-dark-400 text-xs">{awsDisplay ? 'Update credentials:' : 'Configure credentials:'}</p>
           <input type="text" value={awsCreds.accessKeyId} onChange={(e) => setAwsCreds({...awsCreds, accessKeyId: e.target.value})} placeholder="Access Key ID" className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white placeholder-dark-400 focus:outline-none focus:border-primary-500" />
           <input type="password" value={awsCreds.secretAccessKey} onChange={(e) => setAwsCreds({...awsCreds, secretAccessKey: e.target.value})} placeholder="Secret Access Key" className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white placeholder-dark-400 focus:outline-none focus:border-primary-500" />
           <select value={awsCreds.region} onChange={(e) => setAwsCreds({...awsCreds, region: e.target.value})} className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white focus:outline-none focus:border-primary-500">
@@ -187,19 +316,62 @@ const Settings = () => {
           </div>
           <ConnectionStatus configured={company?.llmSettings?.isConfigured} />
         </div>
+
+        {/* Saved LLM Configurations List */}
+        {llmConfigs.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-white text-sm font-medium mb-3">Configured Models</h3>
+            <div className="space-y-2">
+              {llmConfigs.map((cfg) => (
+                <div key={cfg.index} className={`flex items-center justify-between p-3 rounded-xl transition-colors ${cfg.isActive ? 'bg-green-500/10 border border-green-500/30' : 'bg-dark-800/50 border border-dark-700'}`}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">{providerIcon(cfg.provider)}</span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-white text-sm font-medium">{PROVIDER_MODELS[cfg.provider]?.label || cfg.provider}</span>
+                        {cfg.isActive && (
+                          <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full font-medium">Active</span>
+                        )}
+                      </div>
+                      <div className="text-dark-400 text-xs mt-0.5">
+                        Model: <span className="text-dark-300">{cfg.model}</span> · Key: <span className="text-dark-300 font-mono">{cfg.maskedKey}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!cfg.isActive && (
+                      <button onClick={() => handleSetActiveLlm(cfg.index)} className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30 transition-colors text-xs" title="Set as active model">
+                        <Star className="w-3.5 h-3.5" /> Set Active
+                      </button>
+                    )}
+                    <button onClick={() => handleDeleteLlmConfig(cfg.index)} className="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 transition-colors text-xs" title="Delete configuration">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Add New Configuration */}
         <div className="space-y-4">
-          <input type="password" value={llmKey.apiKey} onChange={(e) => setLlmKey({...llmKey, apiKey: e.target.value})} placeholder="OpenAI API Key" className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white placeholder-dark-400 focus:outline-none focus:border-primary-500" />
+          <h3 className="text-white text-sm font-medium flex items-center gap-2">
+            <Plus className="w-4 h-4 text-green-400" /> Add New Configuration
+          </h3>
           <div className="grid grid-cols-2 gap-4">
-            <select value={llmKey.provider} onChange={(e) => setLlmKey({...llmKey, provider: e.target.value})} className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white focus:outline-none focus:border-primary-500">
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
+            <select value={llmKey.provider} onChange={(e) => handleProviderChange(e.target.value)} className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white focus:outline-none focus:border-primary-500">
+              {Object.entries(PROVIDER_MODELS).map(([key, val]) => (
+                <option key={key} value={key}>{val.label}</option>
+              ))}
             </select>
             <select value={llmKey.model} onChange={(e) => setLlmKey({...llmKey, model: e.target.value})} className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white focus:outline-none focus:border-primary-500">
-              {['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'].map(m => <option key={m} value={m}>{m}</option>)}
+              {PROVIDER_MODELS[llmKey.provider]?.models.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
-          <button onClick={handleSaveLlm} disabled={saving || !llmKey.apiKey} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors">
-            <Save className="w-4 h-4" /> Save LLM Key
+          <input type="password" value={llmKey.apiKey} onChange={(e) => setLlmKey({...llmKey, apiKey: e.target.value})} placeholder={`${PROVIDER_MODELS[llmKey.provider]?.label || 'Provider'} API Key`} className="w-full px-4 py-3 bg-dark-800 border border-dark-600 rounded-xl text-white placeholder-dark-400 focus:outline-none focus:border-primary-500" />
+          <button onClick={handleSaveLlmConfig} disabled={saving || !llmKey.apiKey} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors">
+            <Save className="w-4 h-4" /> Save Configuration
           </button>
         </div>
       </div>

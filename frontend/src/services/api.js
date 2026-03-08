@@ -69,7 +69,13 @@ export const companyService = {
   getCompany: () => api.get('/company'),
   updateCompany: (data) => api.put('/company', data),
   setAwsCredentials: (data) => api.post('/company/aws-credentials', data),
+  getAwsCredentials: () => api.get('/company/aws-credentials'),
+  decryptAwsCredentials: () => api.post('/company/aws-credentials/decrypt'),
   setLlmKey: (data) => api.post('/company/llm-key', data),
+  getLlmConfigs: () => api.get('/company/llm-configs'),
+  saveLlmConfig: (data) => api.post('/company/llm-configs', data),
+  setActiveLlmConfig: (data) => api.put('/company/llm-configs/active', data),
+  deleteLlmConfig: (index) => api.delete(`/company/llm-configs/${index}`),
 };
 
 export default api;

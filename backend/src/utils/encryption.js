@@ -6,7 +6,7 @@ const IV_LENGTH = 16;
 
 // used for encrypting sensitive data (like AWS credentials)
 export const encrypt = (text) => {
-  const key = Buffer.from(process.env.ENCRYPTION_KEY || 'default_32_char_encryption_key!!', 'utf-8');
+  const key = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
   
@@ -24,7 +24,7 @@ export const encrypt = (text) => {
 
 // Decrypt sensitive data
 export const decrypt = (encryptedData) => {
-  const key = Buffer.from(process.env.ENCRYPTION_KEY || 'default_32_char_encryption_key!!', 'utf-8');
+  const key = Buffer.from(process.env.ENCRYPTION_KEY || 'default_32_char_encryption_key!!', 'hex');
   const iv = Buffer.from(encryptedData.iv, 'hex');
   const tag = Buffer.from(encryptedData.tag, 'hex');
   const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);

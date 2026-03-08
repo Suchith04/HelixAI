@@ -78,4 +78,10 @@ export const companyService = {
   deleteLlmConfig: (index) => api.delete(`/company/llm-configs/${index}`),
 };
 
+export const cloudwatchService = {
+  getLogGroups: () => api.get('/cloudwatch/log-groups'),
+  fetchLogs: (data) => api.post('/cloudwatch/logs', data),
+  analyzeLogs: (data) => api.post('/cloudwatch/analyze', data),
+};
+
 export default api;

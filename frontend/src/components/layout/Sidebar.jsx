@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bot, AlertTriangle, GitBranch, Settings, LogOut, Zap, User } from 'lucide-react';
+import { LayoutDashboard, Bot, AlertTriangle, GitBranch, Settings, LogOut, Zap, User, CloudLightning } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 const navItems = [
@@ -7,6 +7,7 @@ const navItems = [
   { path: '/agents', label: 'Agents', icon: Bot },
   { path: '/incidents', label: 'Incidents', icon: AlertTriangle },
   { path: '/workflows', label: 'Workflows', icon: GitBranch },
+  { path: '/logs', label: 'CloudWatch Logs', icon: CloudLightning },
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
 

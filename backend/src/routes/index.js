@@ -4,6 +4,7 @@ import agentRouter from './agent.routes.js';
 import workflowRouter from './workflow.routes.js';
 import incidentRouter from './incident.routes.js';
 import dashboardRouter from './dashboard.routes.js';
+import cloudwatchRouter from './cloudwatch.routes.js';
 
 export {
   authRouter,
@@ -11,5 +12,6 @@ export {
   agentRouter,
   workflowRouter,
   incidentRouter,
-  dashboardRouter
+  dashboardRouter,
+  cloudwatchRouter
 };

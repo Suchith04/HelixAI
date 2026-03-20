@@ -58,8 +58,12 @@ export class AgentOrchestrator {
     // Load workflows from database
     await this.loadWorkflows();
 
-    // Set up message subscriptions
-    await this.setupMessageHandlers();
+    // Set up message subscriptions (non-blocking — RabbitMQ may not be running)
+    try {
+      await this.setupMessageHandlers();
+    } catch (err) {
+      logger.warn(`[Orchestrator] Message handlers setup failed (RabbitMQ may not be running): ${err.message}`);
+    }
 
     this.initialized = true;
     logger.info(`[Orchestrator] Initialization complete. ${this.agents.size} agents active.`);
@@ -187,11 +191,38 @@ export class AgentOrchestrator {
   /**
    * Execute a workflow
    */
-  async executeWorkflow(workflowName, initialData, triggeredBy = {}) {
-    const workflow = this.workflows.get(workflowName);
+  async executeWorkflow(workflowIdOrName, initialData, triggeredBy = {}) {
+    // Try to find workflow by _id first, then by name
+    let workflow = null;
+
+    // Attempt DB lookup by _id
+    try {
+      const mongoose = (await import('mongoose')).default;
+      if (mongoose.Types.ObjectId.isValid(workflowIdOrName)) {
+        workflow = await Workflow.findOne({ _id: workflowIdOrName, company: this.companyId });
+      }
+    } catch (err) {
+      logger.warn(`[Orchestrator] DB lookup by _id failed: ${err.message}`);
+    }
+
+    // Fallback to in-memory name lookup
+    if (!workflow) {
+      workflow = this.workflows.get(workflowIdOrName);
+    }
+
+    // Last resort: DB lookup by name
+    if (!workflow) {
+      workflow = await Workflow.findOne({ name: workflowIdOrName, company: this.companyId });
+    }
     
     if (!workflow) {
-      throw new Error(`Workflow not found: ${workflowName}`);
+      throw new Error(`Workflow not found: ${workflowIdOrName}`);
+    }
+
+    // Convert graph-based workflows to executable steps if needed
+    let executableSteps = workflow.steps || [];
+    if ((!executableSteps || executableSteps.length === 0) && workflow.graph?.nodes?.length) {
+      executableSteps = this.graphToSteps(workflow.graph);
     }
 
     const executionId = uuidv4();
@@ -200,31 +231,32 @@ export class AgentOrchestrator {
     const execution = await WorkflowExecution.create({
       company: this.companyId,
       workflow: workflow._id,
-      workflowName,
+      workflowName: workflow.name,
       workflowVersion: workflow.version,
       status: 'running',
       triggeredBy,
       startTime: new Date(),
-      totalSteps: workflow.steps.length,
+      totalSteps: executableSteps.length,
       initialData,
-      steps: workflow.steps.map(step => ({
-        stepOrder: step.order,
+      steps: executableSteps.map((step, idx) => ({
+        stepOrder: step.order || idx + 1,
         agent: step.agent,
-        action: step.action,
+        action: step.action || 'process',
         status: 'pending',
       })),
     });
 
     this.activeWorkflows.set(executionId, execution);
     
-    logger.info(`[Orchestrator] Starting workflow: ${workflowName} (${executionId})`);
+    logger.info(`[Orchestrator] Starting workflow: ${workflow.name} (${executionId})`);
 
     // Execute steps sequentially
     let context = { ...initialData };
     
     try {
-      for (const step of workflow.steps) {
-        const stepIndex = step.order - 1;
+      for (let si = 0; si < executableSteps.length; si++) {
+        const step = executableSteps[si];
+        const stepIndex = (step.order || si + 1) - 1;
         
         // Check condition if exists
         if (step.condition) {
@@ -332,6 +364,49 @@ export class AgentOrchestrator {
     });
 
     return execution;
+  }
+
+  /**
+   * Convert graph-based workflow to executable steps using topological sort
+   */
+  graphToSteps(graph) {
+    const { nodes, edges } = graph;
+    if (!nodes?.length) return [];
+
+    // Build adjacency list and in-degree map
+    const adj = {};
+    const inDegree = {};
+    nodes.forEach(n => { adj[n.id] = []; inDegree[n.id] = 0; });
+    (edges || []).forEach(e => {
+      if (adj[e.source]) {
+        adj[e.source].push(e.target);
+        inDegree[e.target] = (inDegree[e.target] || 0) + 1;
+      }
+    });
+
+    // Kahn's algorithm for topological sort
+    const queue = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+    const sorted = [];
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      sorted.push(curr);
+      for (const neighbor of (adj[curr] || [])) {
+        inDegree[neighbor]--;
+        if (inDegree[neighbor] === 0) queue.push(neighbor);
+      }
+    }
+
+    // Convert sorted node IDs to step objects
+    const nodeMap = {};
+    nodes.forEach(n => { nodeMap[n.id] = n; });
+    return sorted.map((id, idx) => ({
+      order: idx + 1,
+      agent: nodeMap[id].agent,
+      action: nodeMap[id].action || 'process',
+      timeout: 30000,
+      retryOnFail: true,
+      continueOnError: false,
+    }));
   }
 
   /**

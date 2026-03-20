@@ -27,7 +27,8 @@ function createLLM(provider, model, apiKey) {
     case 'google':
       return new ChatGoogleGenerativeAI({
         apiKey: apiKey,
-        modelName: model || 'gemini-2.0-flash',
+        model: model || 'gemini-2.0-flash',
+        modelName: model || 'gemini-2.0-flash', // Keep for backward compatibility if needed
         ...commonOpts,
       });
 
@@ -73,7 +74,7 @@ async function getLLMForCompany(companyId) {
         // Find the active LLM configuration
         const activeConfig = company.llmConfigurations?.find(c => c.isActive);
 
-        if (activeConfig && activeConfig.apiKey?.encrypted) {
+        if (activeConfig && activeConfig.apiKey?.encrypted && activeConfig.apiKey?.iv && activeConfig.apiKey?.tag) {
           try {
             const apiKey = decrypt(activeConfig.apiKey);
             const llm = createLLM(activeConfig.provider, activeConfig.model, apiKey);
@@ -83,20 +84,41 @@ async function getLLMForCompany(companyId) {
           } catch (decryptErr) {
             logger.warn(`Failed to decrypt active LLM config: ${decryptErr.message}`);
           }
+        } else if (activeConfig) {
+          logger.warn(`Active LLM config found for ${activeConfig.provider} but apiKey is incomplete (missing iv/tag). Trying fallbacks.`);
         }
 
         // Fallback: use llmSettings (legacy single config)
-        if (company.llmSettings?.isConfigured && company.llmSettings?.apiKey?.encrypted) {
-          const apiKey = company.getLLMApiKey();
-          if (apiKey) {
-            const llm = createLLM(
-              company.llmSettings.provider,
-              company.llmSettings.model,
-              apiKey
-            );
-            llmCache.set(companyId, { llm, createdAt: Date.now() });
-            logger.info(`LLM initialized (legacy): ${company.llmSettings.provider}/${company.llmSettings.model} for company ${companyId}`);
-            return llm;
+        if (company.llmSettings?.isConfigured && company.llmSettings?.apiKey?.encrypted && company.llmSettings?.apiKey?.iv && company.llmSettings?.apiKey?.tag) {
+          try {
+            const apiKey = company.getLLMApiKey();
+            if (apiKey) {
+              const llm = createLLM(
+                company.llmSettings.provider,
+                company.llmSettings.model,
+                apiKey
+              );
+              llmCache.set(companyId, { llm, createdAt: Date.now() });
+              logger.info(`LLM initialized (legacy): ${company.llmSettings.provider}/${company.llmSettings.model} for company ${companyId}`);
+              return llm;
+            }
+          } catch (legacyErr) {
+            logger.warn(`Failed to decrypt legacy LLM config: ${legacyErr.message}`);
+          }
+        }
+
+        // Fallback 2: try any config from llmConfigurations that has valid encryption data
+        for (const cfg of (company.llmConfigurations || [])) {
+          if (cfg.apiKey?.encrypted && cfg.apiKey?.iv && cfg.apiKey?.tag) {
+            try {
+              const apiKey = decrypt(cfg.apiKey);
+              const llm = createLLM(cfg.provider, cfg.model, apiKey);
+              llmCache.set(companyId, { llm, createdAt: Date.now() });
+              logger.info(`LLM initialized (fallback config): ${cfg.provider}/${cfg.model} for company ${companyId}`);
+              return llm;
+            } catch (cfgErr) {
+              logger.warn(`Failed to decrypt config ${cfg.provider}: ${cfgErr.message}`);
+            }
           }
         }
       }

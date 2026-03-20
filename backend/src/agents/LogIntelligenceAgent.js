@@ -63,17 +63,37 @@ Provide your analysis in JSON format with the following structure:
     return this.executeWithTracking('analyze_logs', async () => {
       const { action, data: actionData } = data;
 
+      // Helper to get logs: use provided (CloudWatch-injected) logs or fetch from DB
+      const getLogs = async (input) => {
+        if (Array.isArray(input)) return input;
+        if (input?.logs && Array.isArray(input.logs)) {
+          if (input._cloudwatchSource) {
+            this.log(`Using ${input.logs.length} pre-processed CloudWatch logs from ${input._cloudwatchSource}`, 'info');
+          } else {
+            this.log(`Using ${input.logs.length} provided logs`, 'info');
+          }
+          return input.logs;
+        }
+        // No logs provided — fetch recent logs from DB as fallback
+        this.log('No CloudWatch logs available, fetching recent logs from database', 'info');
+        const recentLogs = await LogEntry.find({ company: this.companyId })
+          .sort({ timestamp: -1 })
+          .limit(100)
+          .lean();
+        return recentLogs;
+      };
+
       switch (action) {
         case 'analyze':
-          return await this.analyzeLogs(actionData.logs);
+          return await this.analyzeLogs(await getLogs(actionData));
         case 'detect_patterns':
-          return await this.detectPatterns(actionData.logs);
+          return await this.detectPatterns(await getLogs(actionData));
         case 'extract_errors':
-          return await this.extractErrors(actionData.logs);
+          return await this.extractErrors(await getLogs(actionData));
         case 'query':
-          return await this.queryLogs(actionData);
+          return await this.queryLogs(actionData || {});
         default:
-          return await this.analyzeLogs(actionData);
+          return await this.analyzeLogs(await getLogs(actionData));
       }
     });
   }
@@ -82,6 +102,7 @@ Provide your analysis in JSON format with the following structure:
    * Analyze logs for issues and patterns
    */
   async analyzeLogs(logs) {
+    if (!Array.isArray(logs)) logs = [];
     this.log(`Analyzing ${logs.length} log entries`, 'info');
 
     // Categorize logs
@@ -93,10 +114,18 @@ Provide your analysis in JSON format with the following structure:
     // Detect patterns
     const patterns = await this.detectPatterns(logs);
     
-    // LLM analysis for complex issues
+    // LLM analysis for issues, patterns, or general behavior
     let llmInsights = null;
-    if (categorized.errors.length > 0) {
-      llmInsights = await this.getLLMInsights(categorized.errors.slice(0, 20));
+    if (categorized.errors.length > 0 || patterns.length > 0) {
+      llmInsights = await this.getLLMInsights({
+        errors: categorized.errors.slice(0, 20),
+        patterns: patterns
+      });
+    } else if (logs.length > 0) {
+      // General summary if no errors and no patterns detect
+      llmInsights = await this.getLLMInsights({
+        generalSummary: `Analyzed ${logs.length} logs. Info: ${categorized.info.length}, Warnings: ${categorized.warnings.length}. No notable errors or patterns found.`
+      });
     }
 
     // Determine overall severity
@@ -326,20 +355,34 @@ Provide your analysis in JSON format with the following structure:
   }
 
   /**
-   * Get LLM insights for complex analysis
+   * Get LLM insights for comprehensive analysis
    */
-  async getLLMInsights(errors) {
+  async getLLMInsights(insightData) {
     try {
-      const errorSummary = errors.map(e => ({
-        message: e.message?.substring(0, 200),
-        level: e.level,
-        service: e.source?.service,
-        timestamp: e.timestamp,
-      }));
+      let contextData = {};
+      let promptMessage = 'Analyze the following log data and provide insights:';
+
+      if (insightData.errors && insightData.errors.length > 0) {
+        contextData.errors = insightData.errors.map(e => ({
+          message: e.message?.substring(0, 200),
+          level: e.level,
+          service: e.source?.service,
+          timestamp: e.timestamp,
+        }));
+      }
+
+      if (insightData.patterns && insightData.patterns.length > 0) {
+        contextData.patterns = insightData.patterns;
+      }
+
+      if (insightData.generalSummary) {
+        contextData.generalSummary = insightData.generalSummary;
+        promptMessage = 'Provide a brief summary and assurance based on this log report:';
+      }
 
       const response = await this.queryLLM(
-        'Analyze these error logs and provide insights:',
-        { errors: errorSummary }
+        promptMessage,
+        contextData
       );
 
       return response;

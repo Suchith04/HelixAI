@@ -56,17 +56,31 @@ Provide your analysis in JSON format:
     return this.executeWithTracking('crash_investigation', async () => {
       const { action, data: actionData } = data;
 
+      // If we received CloudWatch logs but no specific crash data,
+      // extract errors from the logs and investigate them
+      let effectiveData = actionData || {};
+      if (!effectiveData.errors && effectiveData.logs && Array.isArray(effectiveData.logs)) {
+        const errorLogs = effectiveData.logs.filter(l => {
+          const level = (l.level || '').toLowerCase();
+          return ['error', 'fatal', 'critical'].includes(level);
+        });
+        if (errorLogs.length > 0) {
+          this.log(`Extracted ${errorLogs.length} error logs from CloudWatch for crash investigation`, 'info');
+          effectiveData = { ...effectiveData, errors: errorLogs, source: effectiveData._cloudwatchSource || 'CloudWatch' };
+        }
+      }
+
       switch (action) {
         case 'investigate':
-          return await this.investigateCrashes(actionData);
+          return await this.investigateCrashes(effectiveData);
         case 'analyze_dump':
-          return await this.analyzeDump(actionData);
+          return await this.analyzeDump(effectiveData);
         case 'find_root_cause':
-          return await this.findRootCause(actionData);
+          return await this.findRootCause(effectiveData);
         case 'correlate':
-          return await this.correlateErrors(actionData);
+          return await this.correlateErrors(effectiveData);
         default:
-          return await this.investigateCrashes(actionData);
+          return await this.investigateCrashes(effectiveData);
       }
     });
   }

@@ -77,7 +77,35 @@ Provide analysis in JSON format:
    * Detect anomalies in metrics
    */
   async detectAnomalies(data) {
-    const metrics = data?.metrics || await this.fetchMetrics();
+    let metrics = data?.metrics || [];
+
+    // If CloudWatch logs were injected and no metrics exist,
+    // derive synthetic time-series from log severity counts
+    if (metrics.length === 0 && data?.logs && Array.isArray(data.logs)) {
+      this.log(`Deriving anomaly metrics from ${data.logs.length} CloudWatch logs`, 'info');
+      const hourBuckets = {};
+      for (const log of data.logs) {
+        const hour = new Date(log.timestamp).getHours();
+        const level = (log.level || 'info').toLowerCase();
+        const isError = ['error', 'fatal', 'critical'].includes(level);
+        if (!hourBuckets[hour]) hourBuckets[hour] = { errors: 0, total: 0 };
+        hourBuckets[hour].total++;
+        if (isError) hourBuckets[hour].errors++;
+      }
+      const errorRate = Object.entries(hourBuckets)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([hour, b]) => ({ value: b.total > 0 ? (b.errors / b.total) * 100 : 0, timestamp: new Date() }));
+      const logVolume = Object.entries(hourBuckets)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([hour, b]) => ({ value: b.total, timestamp: new Date() }));
+      metrics = [
+        { name: 'log_error_rate', resourceId: 'cloudwatch-logs', type: 'percentage', values: errorRate },
+        { name: 'log_volume_per_hour', resourceId: 'cloudwatch-logs', type: 'count', values: logVolume },
+      ];
+    } else if (metrics.length === 0) {
+      metrics = await this.fetchMetrics();
+    }
+
     this.log(`Detecting anomalies in ${metrics.length} metric series`, 'info');
 
     const anomalies = [];

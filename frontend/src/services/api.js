@@ -85,4 +85,14 @@ export const cloudwatchService = {
   analyzeLogs: (data) => api.post('/cloudwatch/analyze', data),
 };
 
+export const recoveryService = {
+  getPending: () => api.get('/recovery/pending'),
+  getAuditTrail: (params) => api.get('/recovery/audit', { params }),
+  approveAction: (actionId) => api.post(`/recovery/${actionId}/approve`),
+  rejectAction: (actionId, reason) => api.post(`/recovery/${actionId}/reject`, { reason }),
+  getAwsResources: () => api.get('/recovery/aws-resources'),
+  getAwsMetrics: (data) => api.post('/recovery/aws-metrics', data),
+  validateCreds: () => api.get('/recovery/validate-creds'),
+};
+
 export default api;

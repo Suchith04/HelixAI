@@ -3,7 +3,9 @@ import logger from '../../utils/logger.js';
 import { queryLLM } from '../../config/langchain.js';
 import { setAgentState, getAgentState, publishEvent } from '../../config/redis.js';
 import { publishToAgent, broadcastMessage } from '../../config/rabbitmq.js';
-import { AgentState, Message } from '../../models/index.js';
+import { AgentState, Message, Company } from '../../models/index.js';
+import * as awsCloudService from '../../services/awsCloudService.js';
+import { decrypt } from '../../utils/encryption.js';
 
 /**
  * BaseAgent - Foundation class for all specialized agents
@@ -349,6 +351,36 @@ Format your response as JSON when appropriate.`;
     }
     
     throw lastError;
+  }
+
+  /**
+   * Get decrypted AWS credentials for this company (cached for 5 min)
+   * @returns {Promise<Object|null>} { accessKeyId, secretAccessKey, region }
+   */
+  async getAwsCredentials() {
+    // Cache check
+    if (this._awsCreds && Date.now() - this._awsCredsAt < 300000) {
+      return this._awsCreds;
+    }
+    try {
+      const company = await Company.findById(this.companyId);
+      if (!company?.awsCredentials?.isConfigured) return null;
+      const creds = company.getAwsCredentials();
+      this._awsCreds = creds;
+      this._awsCredsAt = Date.now();
+      return creds;
+    } catch (err) {
+      this.log(`Failed to load AWS credentials: ${err.message}`, 'warn');
+      return null;
+    }
+  }
+
+  /**
+   * Access the awsCloudService module (convenience accessor)
+   * Usage: const instances = await this.aws().getEC2Instances(creds);
+   */
+  aws() {
+    return awsCloudService;
   }
 
   /**

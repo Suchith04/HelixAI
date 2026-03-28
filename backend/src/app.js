@@ -11,7 +11,8 @@ import {
   workflowRouter, 
   incidentRouter,
   dashboardRouter,
-  cloudwatchRouter 
+  cloudwatchRouter,
+  recoveryRouter,
 } from './routes/index.js';
 const app = express();
 
@@ -37,6 +38,7 @@ app.use('/api/workflows', workflowRouter);
 app.use('/api/incidents', incidentRouter);
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/cloudwatch', cloudwatchRouter);
+app.use('/api/recovery', recoveryRouter);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

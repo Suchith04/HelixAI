@@ -1,10 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Bot, AlertTriangle, GitBranch, Settings, LogOut, Zap, User, CloudLightning } from 'lucide-react';
+import { LayoutDashboard, Bot, AlertTriangle, GitBranch, Settings, LogOut, Zap, User, CloudLightning, Shield } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/agents', label: 'Agents', icon: Bot },
+  { path: '/action-center', label: 'Action Center', icon: Shield },
   { path: '/incidents', label: 'Incidents', icon: AlertTriangle },
   { path: '/workflows', label: 'Workflows', icon: GitBranch },
   { path: '/logs', label: 'CloudWatch Logs', icon: CloudLightning },

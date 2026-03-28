@@ -37,9 +37,14 @@ const agentStateSchema = new mongoose.Schema({
     estimatedCompletion: Date,
   },
   lastAction: {
-    type: String,
-    timestamp: Date,
-    result: mongoose.Schema.Types.Mixed,
+    type: {
+      type: String,
+      timestamp: Date,
+      result: {
+        severity: String,
+        confidence: Number
+      }
+    },
   },
   metrics: {
     tasksCompleted: { type: Number, default: 0 },

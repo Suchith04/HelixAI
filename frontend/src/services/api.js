@@ -43,6 +43,7 @@ export const agentService = {
   getAgent: (id) => api.get(`/agents/${id}`),
   triggerAgent: (data) => api.post('/agents/trigger', data),
   initializeAgents: () => api.post('/agents/initialize'),
+  getAgentHistory: (params) => api.get('/agents/history', { params }),
 };
 
 export const incidentService = {

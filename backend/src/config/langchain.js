@@ -20,7 +20,7 @@ function createLLM(provider, model, apiKey) {
     case 'openai':
       return new ChatOpenAI({
         openAIApiKey: apiKey,
-        modelName: model || 'gpt-4o-mini',
+        model: model || 'gpt-4o-mini',
         ...commonOpts,
       });
 
@@ -28,21 +28,21 @@ function createLLM(provider, model, apiKey) {
       return new ChatGoogleGenerativeAI({
         apiKey: apiKey,
         model: model || 'gemini-2.0-flash',
-        modelName: model || 'gemini-2.0-flash', // Keep for backward compatibility if needed
+        model: model || 'gemini-2.0-flash', // Keep for backward compatibility if needed
         ...commonOpts,
       });
 
     case 'anthropic':
       return new ChatAnthropic({
         anthropicApiKey: apiKey,
-        modelName: model || 'claude-3.5-sonnet',
+        model: model || 'claude-3.5-sonnet',
         ...commonOpts,
       });
 
     case 'groq':
       return new ChatGroq({
         apiKey: apiKey,
-        modelName: model || 'llama-3.3-70b-versatile',
+        model: model || 'llama-3.3-70b-versatile',
         ...commonOpts,
       });
 
@@ -50,7 +50,7 @@ function createLLM(provider, model, apiKey) {
       logger.warn(`Unknown LLM provider: ${provider}, falling back to OpenAI`);
       return new ChatOpenAI({
         openAIApiKey: apiKey,
-        modelName: model || 'gpt-4o-mini',
+        model: model || 'gpt-4o-mini',
         ...commonOpts,
       });
   }

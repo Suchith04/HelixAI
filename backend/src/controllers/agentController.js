@@ -1,4 +1,4 @@
-import { Agent, AgentState, Company } from '../models/index.js';
+import { Agent, AgentState, AgentHistory, Company } from '../models/index.js';
 import { getOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import { listLogGroups, fetchLogs, filterAndGroupLogs } from '../services/awsCloudWatchService.js';
 import logger from '../utils/logger.js';
@@ -153,8 +153,47 @@ export const triggerAgent = async (req, res, next) => {
         status: 'idle',
         $inc: { 'metrics.tasksCompleted': 1 },
         'metrics.successRate': 1,
+        lastAction: {
+          type: action || 'process',
+          timestamp: new Date(),
+          result: { severity: result?.severity, confidence: result?.confidence },
+        },
       }
     );
+
+    // ── Save to AgentHistory collection ─────────────────────────────────
+    try {
+      // Find the agent record for the display name
+      const agentRecord = await Agent.findOne({ company: req.companyId, name: agentName });
+      const logSource = enrichedData._cloudwatchSource || 'database';
+
+      await AgentHistory.create({
+        company: req.companyId,
+        agentName,
+        agentDisplayName: agentRecord?.displayName || agentName,
+        logSource,
+        severity: result?.severity || 'unknown',
+        confidence: result?.confidence || 0,
+        llmInsights: result?.llmInsights || null,
+        summary: {
+          totalLogs: result?.totalLogs || 0,
+          errors: result?.categorized?.errors || 0,
+          warnings: result?.categorized?.warnings || 0,
+          info: result?.categorized?.info || 0,
+        },
+        patterns: result?.patterns || [],
+        cloudwatchMeta: cloudwatchMeta || null,
+        logsAnalyzedFrom: enrichedData.logs && enrichedData.logs.length > 0
+          ? new Date(Date.now() - 24 * 60 * 60 * 1000)
+          : null,
+        logsAnalyzedTo: enrichedData.logs && enrichedData.logs.length > 0
+          ? new Date()
+          : null,
+      });
+      logger.info(`[AgentController] Saved analysis history for ${agentName} (source: ${logSource})`);
+    } catch (histErr) {
+      logger.error(`[AgentController] Failed to save agent history: ${histErr.message}`);
+    }
 
     res.json({ result, cloudwatchMeta });
   } catch (error) {
@@ -234,6 +273,26 @@ export const initializeAgents = async (req, res, next) => {
     }
 
     res.json({ message: 'Agents initialized successfully', agents });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get agent analysis history
+export const getAgentHistory = async (req, res, next) => {
+  try {
+    const { agentName, logSource } = req.query;
+    const filter = { company: req.companyId };
+
+    if (agentName) filter.agentName = agentName;
+    if (logSource) filter.logSource = logSource;
+
+    const history = await AgentHistory.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    res.json({ history });
   } catch (error) {
     next(error);
   }

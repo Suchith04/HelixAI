@@ -5,6 +5,7 @@ import workflowRouter from './workflow.routes.js';
 import incidentRouter from './incident.routes.js';
 import dashboardRouter from './dashboard.routes.js';
 import cloudwatchRouter from './cloudwatch.routes.js';
+import recoveryRouter from './recovery.routes.js';
 
 export {
   authRouter,
@@ -13,5 +14,6 @@ export {
   workflowRouter,
   incidentRouter,
   dashboardRouter,
-  cloudwatchRouter
+  cloudwatchRouter,
+  recoveryRouter,
 };

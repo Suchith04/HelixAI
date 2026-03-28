@@ -54,3 +54,16 @@ If you are developing a production application, we recommend using TypeScript wi
     │MongoDB│    │ Redis │ │FAISS│  │LangChain│  │ AWS │
     │       │    │       │ │     │  │(Claude) │  │ K8s │
     └───────┘    └───────┘ └─────┘  └─────────┘  └─────┘
+
+
+IAM Permissions required to execute in our application:
+IMPORTANT
+
+IAM Permissions (Least Privilege):
+
+EC2: ec2:DescribeInstances, ec2:DescribeInstanceStatus, ec2:RebootInstances, ec2:StartInstances, ec2:StopInstances
+Lambda: lambda:ListFunctions, lambda:GetFunction, lambda:InvokeFunction, lambda:GetFunctionConfiguration
+RDS: rds:DescribeDBInstances, rds:DescribeDBClusters, rds:RebootDBInstance, rds:DescribeEvents
+CloudWatch: logs:DescribeLogGroups, logs:FilterLogEvents (existing), cloudwatch:GetMetricData, cloudwatch:ListMetrics, cloudwatch:DescribeAlarms
+Cost Explorer: ce:GetCostAndUsage, ce:GetCostForecast
+General: sts:GetCallerIdentity

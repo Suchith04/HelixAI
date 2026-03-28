@@ -32,4 +32,16 @@ export const onWorkflowCompleted = (callback) => {
   socket?.on('workflow:completed', callback);
 };
 
+export const onRecoveryPending = (callback) => {
+  socket?.on('recovery:pending', callback);
+};
+
+export const onRecoveryExecuted = (callback) => {
+  socket?.on('recovery:executed', callback);
+};
+
+export const onRecoveryApproved = (callback) => {
+  socket?.on('recovery:approved', callback);
+};
+
 export const getSocket = () => socket;

@@ -11,6 +11,7 @@ import Workflows from './pages/Workflows';
 import WorkflowBuilder from './pages/WorkflowBuilder';
 import Settings from './pages/Settings';
 import Logs from './pages/Logs';
+import ActionCenter from './pages/ActionCenter';
 
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
@@ -40,6 +41,7 @@ function App() {
             <Route path="workflows/:id" element={<WorkflowBuilder />} />
             <Route path="settings" element={<Settings />} />
             <Route path="logs" element={<Logs />} />
+            <Route path="action-center" element={<ActionCenter />} />
           </Route>
         </Routes>
       </BrowserRouter>

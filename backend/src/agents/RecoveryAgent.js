@@ -1,581 +1,265 @@
 import BaseAgent from './base/BaseAgent.js';
 import { Recovery, Incident } from '../models/index.js';
+import RecoveryManager from '../services/RecoveryManager.js';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
- * RecoveryAgent - Executes auto-healing actions
- * Restarts services, rolls back deployments, routes traffic
+ * RecoveryAgent - Automated infrastructure recovery with REAL AWS integration
+ * Uses RecoveryManager for HITL approval on high-risk actions
  */
 class RecoveryAgent extends BaseAgent {
   constructor(orchestrator, companyId) {
     super('Recovery', orchestrator, companyId);
-    
-    this.activeRecoveries = new Map();
+
     this.config = {
       ...this.config,
-      approvalRequired: true,
-      maxRiskLevel: 3,
-      healthCheckDelay: 5000,
-      rollbackEnabled: true,
+      maxRetries: 3,
+      snapshotBeforeRecovery: true,
+      autoApproveThreshold: 0.95,
     };
 
-    // Available recovery actions
-    this.actions = new Map([
-      ['restart-service', {
-        name: 'Restart Service',
-        riskLevel: 2,
-        requiresApproval: false,
-        execute: this.restartService.bind(this),
-        rollback: this.rollbackRestart.bind(this),
-      }],
-      ['scale-up', {
-        name: 'Scale Up',
-        riskLevel: 2,
-        requiresApproval: false,
-        execute: this.scaleUp.bind(this),
-        rollback: this.scaleDown.bind(this),
-      }],
-      ['scale-out', {
-        name: 'Scale Out',
-        riskLevel: 2,
-        requiresApproval: false,
-        execute: this.scaleOut.bind(this),
-        rollback: this.scaleIn.bind(this),
-      }],
-      ['rollback-deployment', {
-        name: 'Rollback Deployment',
-        riskLevel: 4,
-        requiresApproval: true,
-        execute: this.rollbackDeployment.bind(this),
-        rollback: null,
-      }],
-      ['failover', {
-        name: 'Failover',
-        riskLevel: 4,
-        requiresApproval: true,
-        execute: this.executeFailover.bind(this),
-        rollback: this.failback.bind(this),
-      }],
-      ['update-config', {
-        name: 'Update Configuration',
-        riskLevel: 3,
-        requiresApproval: true,
-        execute: this.updateConfig.bind(this),
-        rollback: this.revertConfig.bind(this),
-      }],
-    ]);
+    // Map action types to risk levels
+    this.riskMap = {
+      reboot_instance: 'Low',
+      start_instance: 'Low',
+      invoke_lambda: 'Low',
+      stop_instance: 'High',
+      reboot_rds: 'High',
+      scale_up: 'High',
+      rollback: 'High',
+    };
   }
 
   getSystemPrompt() {
-    return `You are the Recovery Agent, an AI specialized in executing auto-healing actions for cloud infrastructure.
-Your capabilities include:
-- Restarting failed services and pods
-- Scaling resources up/out based on demand
-- Rolling back problematic deployments
-- Executing failover procedures
-- Updating configurations to fix issues
+    return `You are the Recovery Agent for AWS cloud infrastructure. You analyze system issues and recommend specific recovery actions.
+You have access to REAL AWS services: EC2, Lambda, RDS via API.
 
-Safety is paramount. Always:
-1. Assess risk before taking action
-2. Take snapshots before changes
-3. Verify health after actions
-4. Be prepared to rollback
-
-Provide action plans in JSON format:
+When analyzing an issue, you MUST return a structured JSON response:
 {
-  "action": "action_type",
-  "target": {"type": "service|pod|deployment", "name": "name"},
-  "riskLevel": 1-5,
-  "requiresApproval": true|false,
-  "steps": ["step1", "step2"],
-  "healthChecks": ["check1", "check2"],
-  "rollbackPlan": "How to undo if needed"
+  "analysis": "Root cause description based on evidence",
+  "recommended_action": "reboot_instance|stop_instance|start_instance|invoke_lambda|reboot_rds",
+  "target": {
+    "resourceType": "ec2|lambda|rds",
+    "resourceId": "i-xxx or function-name or db-instance-id",
+    "resourceName": "Human-friendly name"
+  },
+  "risk_level": "Low|High",
+  "reasoning": "Why this action is necessary and its potential impact",
+  "confidence": 0.0-1.0
+}
+
+Risk level guidelines:
+- Low: Non-destructive (reboot running instance, start stopped instance, invoke lambda)
+- High: Potentially destructive or impactful (stop instance, reboot database, scale changes)
+
+If no action is needed, return:
+{
+  "analysis": "Description of findings",
+  "recommended_action": "none",
+  "reasoning": "Why no action is needed",
+  "confidence": 0.0-1.0
 }`;
   }
 
-  /**
-   * Main processing method
-   */
   async process(data) {
     return this.executeWithTracking('recovery_action', async () => {
       const { action, data: actionData } = data;
-
       switch (action) {
-        case 'auto_heal':
-          return await this.handleAutoHeal(actionData);
-        case 'scale_resources':
-          return await this.handleScaleResources(actionData);
-        case 'execute':
-          return await this.executeAction(actionData);
-        case 'rollback':
-          return await this.rollbackAction(actionData);
-        case 'approve':
-          return await this.approveAction(actionData);
-        default:
-          return await this.handleAutoHeal(actionData);
+        case 'analyze_and_recover': return await this.analyzeAndRecover(actionData);
+        case 'auto_heal':           return await this.autoHeal(actionData);
+        case 'scale_resources':     return await this.scaleResources(actionData);
+        case 'get_aws_overview':    return await this.getAwsOverview(actionData);
+        default:                    return await this.analyzeAndRecover(actionData);
       }
     });
   }
 
   /**
-   * Handle auto-healing request
+   * Main flow: Analyze issue → LLM suggests action → RecoveryManager handles execution/HITL
    */
-  async handleAutoHeal(data) {
-    const { rootCauses, investigations, autoApprove } = data;
-    this.log(`Processing auto-heal request for ${rootCauses?.length || 0} issues`, 'info');
-
-    const actions = [];
-
-    for (const rootCause of (rootCauses || [])) {
-      const suggestedAction = await this.determineBestAction(rootCause);
-      
-      if (suggestedAction) {
-        const result = await this.executeRecoveryAction(
-          suggestedAction,
-          rootCause,
-          autoApprove
-        );
-        actions.push(result);
-      }
+  async analyzeAndRecover(data) {
+    const creds = await this.getAwsCredentials();
+    if (!creds) {
+      return { status: 'error', message: 'AWS credentials not configured', severity: 'high', confidence: 0 };
     }
 
-    // Notify Recommendation Agent
-    await this.sendMessage('Recommendation', {
-      type: 'notification',
-      payload: {
-        action: 'recovery_actions',
-        actions,
-        source: 'Recovery',
+    // Gather current AWS state for context
+    const aws = this.aws();
+    let awsState = {};
+    try {
+      const [instances, lambdas, rds, alarms] = await Promise.all([
+        aws.getEC2Instances(creds).catch(() => []),
+        aws.getLambdaFunctions(creds).catch(() => []),
+        aws.getRDSInstances(creds).catch(() => []),
+        aws.getCloudWatchAlarms(creds).catch(() => []),
+      ]);
+      awsState = {
+        ec2: instances.map(i => ({ id: i.instanceId, name: i.name, state: i.state, type: i.instanceType })),
+        lambda: lambdas.map(f => ({ name: f.functionName, state: f.state, runtime: f.runtime })),
+        rds: rds.map(d => ({ id: d.dbInstanceId, engine: d.engine, status: d.status })),
+        activeAlarms: alarms.filter(a => a.state === 'ALARM').map(a => ({ name: a.alarmName, metric: a.metricName, reason: a.stateReason?.substring(0, 100) })),
+      };
+    } catch (err) {
+      this.log(`AWS state fetch failed: ${err.message}`, 'warn');
+    }
+
+    // Query LLM for action intent
+    let actionIntent;
+    try {
+      const llmResponse = await this.queryLLM(
+        'Analyze this issue and recommend a specific AWS recovery action:',
+        { issue: data, awsState, logs: data?.logs?.slice(0, 20), cloudwatchSource: data?._cloudwatchSource }
+      );
+
+      // Parse structured JSON response
+      try {
+        actionIntent = JSON.parse(llmResponse);
+      } catch (e) {
+        // Try extracting JSON from markdown code block
+        const jsonMatch = llmResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          actionIntent = JSON.parse(jsonMatch[1]);
+        } else {
+          actionIntent = { analysis: llmResponse, recommended_action: 'none', reasoning: 'Could not parse structured response', confidence: 0.3 };
+        }
+      }
+    } catch (err) {
+      this.log(`LLM action intent failed: ${err.message}`, 'error');
+      return { status: 'error', message: 'Failed to generate action intent', error: err.message };
+    }
+
+    // If no action needed, return analysis only
+    if (!actionIntent.recommended_action || actionIntent.recommended_action === 'none') {
+      return {
+        status: 'no_action',
+        analysis: actionIntent.analysis,
+        reasoning: actionIntent.reasoning,
+        confidence: actionIntent.confidence || 0.5,
+        severity: 'low',
+        llmInsights: actionIntent.analysis,
+      };
+    }
+
+    // Determine risk level (LLM suggestion + our risk map)
+    const riskLevel = this.riskMap[actionIntent.recommended_action] || actionIntent.risk_level || 'High';
+
+    // Delegate to RecoveryManager
+    const result = await RecoveryManager.processAction({
+      companyId: this.companyId,
+      credentials: creds,
+      agentName: this.name,
+      analysis: actionIntent.analysis,
+      recommendedAction: {
+        type: actionIntent.recommended_action,
+        target: actionIntent.target,
+        params: actionIntent.params || {},
+        awsApiCall: this.getAwsApiCall(actionIntent.recommended_action),
       },
-      priority: 3,
+      riskLevel,
+      reasoning: actionIntent.reasoning,
     });
 
     return {
-      actionsInitiated: actions.length,
-      successful: actions.filter(a => a.status === 'success').length,
-      pending: actions.filter(a => a.status === 'pending_approval').length,
-      failed: actions.filter(a => a.status === 'failed').length,
-      actions,
+      status: result.status,
+      actionId: result.actionId,
+      analysis: actionIntent.analysis,
+      action: actionIntent.recommended_action,
+      target: actionIntent.target,
+      riskLevel,
+      reasoning: actionIntent.reasoning,
+      confidence: actionIntent.confidence || 0.7,
+      severity: riskLevel === 'High' ? 'high' : 'medium',
+      llmInsights: actionIntent.analysis,
+      result: result.result || null,
     };
   }
 
   /**
-   * Handle scale resources request
+   * Auto-heal flow (triggered by other agents like CrashDiagnostic)
    */
-  async handleScaleResources(data) {
-    const { bottlenecks, recommendations } = data;
-    this.log(`Scaling resources for ${bottlenecks?.length || 0} bottlenecks`, 'info');
+  async autoHeal(data) {
+    const { rootCauses, investigations, autoApprove } = data;
+    this.log(`Auto-heal initiated with ${rootCauses?.length || 0} root causes`, 'info');
 
     const results = [];
-
-    for (const bottleneck of (bottlenecks || [])) {
-      let actionType;
-      
-      switch (bottleneck.metric) {
-        case 'cpu':
-        case 'memory':
-          actionType = 'scale-up';
-          break;
-        default:
-          actionType = 'scale-out';
-      }
-
-      const result = await this.executeRecoveryAction(
-        actionType,
-        {
-          target: {
-            type: bottleneck.type,
-            name: bottleneck.name,
-            resourceId: bottleneck.resourceId,
-          },
-          reason: `${bottleneck.metric} at ${bottleneck.value}%`,
-        },
-        bottleneck.severity === 'critical' // Auto-approve critical
-      );
-
+    for (const rc of (rootCauses || [])) {
+      const result = await this.analyzeAndRecover({
+        issue: rc.description,
+        rootCause: rc,
+        source: 'auto_heal',
+        autoApprove,
+      });
       results.push(result);
     }
 
-    return { results };
-  }
-
-  /**
-   * Determine best action for a root cause
-   */
-  async determineBestAction(rootCause) {
-    // Use LLM to determine action
-    try {
-      const response = await this.queryLLM(
-        'Based on this root cause, what recovery action should be taken?',
-        { rootCause, availableActions: Array.from(this.actions.keys()) }
-      );
-
-      // Parse response to get action type
-      const actionMatch = response.match(/(restart|scale|rollback|failover|config)/i);
-      if (actionMatch) {
-        const actionMap = {
-          restart: 'restart-service',
-          scale: 'scale-up',
-          rollback: 'rollback-deployment',
-          failover: 'failover',
-          config: 'update-config',
-        };
-        return actionMap[actionMatch[1].toLowerCase()] || 'restart-service';
-      }
-    } catch (e) {
-      this.log('LLM action determination failed, using default', 'warn');
-    }
-
-    // Default to restart
-    return 'restart-service';
-  }
-
-  /**
-   * Execute a recovery action
-   */
-  async executeRecoveryAction(actionType, context, autoApprove = false) {
-    const actionDef = this.actions.get(actionType);
-    
-    if (!actionDef) {
-      return { status: 'failed', error: `Unknown action: ${actionType}` };
-    }
-
-    const recoveryId = `REC-${Date.now()}-${uuidv4().slice(0, 8)}`;
-
-    // Create recovery record
-    const recovery = await Recovery.create({
-      company: this.companyId,
-      recoveryId,
-      type: actionType.split('-')[0],
-      action: {
-        name: actionDef.name,
-        description: `Auto-healing: ${context.reason || 'Issue detected'}`,
-      },
-      target: context.target || {},
-      status: 'pending',
-      riskLevel: actionDef.riskLevel,
-      approval: {
-        required: actionDef.requiresApproval && !autoApprove,
-        autoApproved: autoApprove,
-      },
-      triggeredBy: {
-        type: 'agent',
-        agentName: context.source || 'Recovery',
-      },
-    });
-
-    // Check if approval required
-    if (actionDef.requiresApproval && !autoApprove && actionDef.riskLevel > this.config.maxRiskLevel) {
-      this.log(`Action ${actionType} requires approval`, 'info');
-      
-      // Broadcast for human approval
-      await this.broadcast({
-        type: 'approval_required',
-        recoveryId,
-        action: actionDef.name,
-        riskLevel: actionDef.riskLevel,
-        context,
-      });
-
-      return {
-        status: 'pending_approval',
-        recoveryId,
-        action: actionType,
-        riskLevel: actionDef.riskLevel,
-      };
-    }
-
-    // Execute action
-    return await this.executeAction({
-      recoveryId,
-      actionType,
-      context,
-    });
-  }
-
-  /**
-   * Execute approved action
-   */
-  async executeAction(data) {
-    const { recoveryId, actionType, context } = data;
-
-    const recovery = await Recovery.findOne({
-      company: this.companyId,
-      recoveryId,
-    });
-
-    if (!recovery) {
-      return { status: 'failed', error: 'Recovery record not found' };
-    }
-
-    const actionDef = this.actions.get(actionType);
-    if (!actionDef) {
-      return { status: 'failed', error: `Unknown action: ${actionType}` };
-    }
-
-    // Update status
-    recovery.status = 'in_progress';
-    recovery.execution = { startedAt: new Date() };
-    await recovery.save();
-
-    this.log(`Executing ${actionType} for ${recoveryId}`, 'info');
-
-    try {
-      // Take snapshot before action
-      if (this.config.rollbackEnabled) {
-        const snapshot = await this.takeSnapshot(context.target);
-        recovery.snapshot = {
-          taken: true,
-          data: snapshot,
-          createdAt: new Date(),
-        };
-        await recovery.save();
-      }
-
-      // Execute action
-      const result = await actionDef.execute(context);
-
-      // Wait and perform health check
-      await this.sleep(this.config.healthCheckDelay);
-      const healthResult = await this.performHealthCheck(context.target);
-
-      if (!healthResult.healthy) {
-        // Rollback if unhealthy
-        if (actionDef.rollback && this.config.rollbackEnabled) {
-          this.log(`Health check failed, rolling back ${recoveryId}`, 'warn');
-          await actionDef.rollback(context, recovery.snapshot.data);
-          
-          recovery.rollback = {
-            performed: true,
-            reason: 'Health check failed',
-            performedAt: new Date(),
-            success: true,
-          };
-        }
-
-        recovery.status = 'rolled_back';
-        recovery.result = {
-          success: false,
-          message: 'Action rolled back due to failed health check',
-        };
-      } else {
-        recovery.status = 'completed';
-        recovery.result = {
-          success: true,
-          message: 'Action completed successfully',
-          data: result,
-        };
-        recovery.healthCheck = {
-          performed: true,
-          passed: true,
-          checkedAt: new Date(),
-          results: healthResult,
-        };
-      }
-
-      recovery.execution.completedAt = new Date();
-      recovery.execution.duration = 
-        recovery.execution.completedAt - recovery.execution.startedAt;
-      await recovery.save();
-
-      return {
-        status: recovery.status,
-        recoveryId,
-        result: recovery.result,
-      };
-
-    } catch (error) {
-      recovery.status = 'failed';
-      recovery.result = {
-        success: false,
-        error: {
-          message: error.message,
-          stack: error.stack,
-        },
-      };
-      await recovery.save();
-
-      this.log(`Action failed: ${error.message}`, 'error');
-
-      return {
-        status: 'failed',
-        recoveryId,
-        error: error.message,
-      };
-    }
-  }
-
-  /**
-   * Approve a pending action
-   */
-  async approveAction(data) {
-    const { recoveryId, userId, approved, reason } = data;
-
-    const recovery = await Recovery.findOne({
-      company: this.companyId,
-      recoveryId,
-      status: 'pending',
-    });
-
-    if (!recovery) {
-      return { status: 'failed', error: 'Recovery not found or not pending' };
-    }
-
-    if (approved) {
-      recovery.approval.approvedBy = userId;
-      recovery.approval.approvedAt = new Date();
-      recovery.approval.reason = reason;
-      await recovery.save();
-
-      // Execute the action
-      return await this.executeAction({
-        recoveryId,
-        actionType: `${recovery.type}-${recovery.action.name.toLowerCase().replace(/ /g, '-')}`,
-        context: recovery.target,
-      });
-    } else {
-      recovery.status = 'cancelled';
-      recovery.approval.reason = reason || 'Rejected by user';
-      await recovery.save();
-
-      return { status: 'cancelled', recoveryId };
-    }
-  }
-
-  /**
-   * Rollback a completed action
-   */
-  async rollbackAction(data) {
-    const { recoveryId } = data;
-
-    const recovery = await Recovery.findOne({
-      company: this.companyId,
-      recoveryId,
-      status: 'completed',
-    });
-
-    if (!recovery || !recovery.snapshot?.taken) {
-      return { status: 'failed', error: 'Cannot rollback - no snapshot available' };
-    }
-
-    const actionType = `${recovery.type}-service`;
-    const actionDef = this.actions.get(actionType);
-
-    if (!actionDef?.rollback) {
-      return { status: 'failed', error: 'Rollback not available for this action' };
-    }
-
-    try {
-      await actionDef.rollback(recovery.target, recovery.snapshot.data);
-
-      recovery.rollback = {
-        performed: true,
-        reason: 'Manual rollback requested',
-        performedAt: new Date(),
-        success: true,
-      };
-      recovery.status = 'rolled_back';
-      await recovery.save();
-
-      return { status: 'rolled_back', recoveryId };
-    } catch (error) {
-      recovery.rollback = {
-        performed: true,
-        reason: error.message,
-        performedAt: new Date(),
-        success: false,
-      };
-      await recovery.save();
-
-      return { status: 'failed', error: error.message };
-    }
-  }
-
-  // Action implementations (stubs - would integrate with actual infrastructure)
-  async restartService(context) {
-    this.log(`Restarting service: ${context.target?.name}`, 'info');
-    // In production: call K8s API to restart pod/deployment
-    await this.sleep(2000); // Simulate restart time
-    return { restarted: true, service: context.target?.name };
-  }
-
-  async rollbackRestart(context, snapshot) {
-    // Restart doesn't need rollback
-    return { rolledBack: false, reason: 'Restart is idempotent' };
-  }
-
-  async scaleUp(context) {
-    this.log(`Scaling up: ${context.target?.name}`, 'info');
-    // In production: call cloud API to resize instance
-    await this.sleep(3000);
-    return { scaledUp: true, target: context.target?.name };
-  }
-
-  async scaleDown(context, snapshot) {
-    this.log(`Scaling down: ${context.target?.name}`, 'info');
-    await this.sleep(3000);
-    return { scaledDown: true };
-  }
-
-  async scaleOut(context) {
-    this.log(`Scaling out: ${context.target?.name}`, 'info');
-    await this.sleep(5000);
-    return { scaledOut: true, newInstances: 1 };
-  }
-
-  async scaleIn(context, snapshot) {
-    this.log(`Scaling in: ${context.target?.name}`, 'info');
-    await this.sleep(3000);
-    return { scaledIn: true };
-  }
-
-  async rollbackDeployment(context) {
-    this.log(`Rolling back deployment: ${context.target?.name}`, 'info');
-    await this.sleep(10000);
-    return { rolledBack: true };
-  }
-
-  async executeFailover(context) {
-    this.log(`Executing failover for: ${context.target?.name}`, 'info');
-    await this.sleep(15000);
-    return { failedOver: true };
-  }
-
-  async failback(context, snapshot) {
-    this.log(`Failing back: ${context.target?.name}`, 'info');
-    await this.sleep(10000);
-    return { failedBack: true };
-  }
-
-  async updateConfig(context) {
-    this.log(`Updating config for: ${context.target?.name}`, 'info');
-    await this.sleep(2000);
-    return { configUpdated: true };
-  }
-
-  async revertConfig(context, snapshot) {
-    this.log(`Reverting config for: ${context.target?.name}`, 'info');
-    await this.sleep(2000);
-    return { configReverted: true };
-  }
-
-  // Helper methods
-  async takeSnapshot(target) {
     return {
-      target,
-      timestamp: new Date(),
-      state: 'snapshot_placeholder',
+      totalActions: results.length,
+      completed: results.filter(r => r.status === 'completed').length,
+      pending: results.filter(r => r.status === 'pending_approval').length,
+      failed: results.filter(r => r.status === 'failed').length,
+      results,
+      severity: results.some(r => r.riskLevel === 'High') ? 'high' : 'medium',
+      confidence: 0.75,
     };
   }
 
-  async performHealthCheck(target) {
-    // Simulate health check
-    await this.sleep(1000);
-    return { healthy: true, checks: ['connectivity', 'response_time'] };
+  /**
+   * Scale resources (triggered by ResourceOptimization)
+   */
+  async scaleResources(data) {
+    const { bottlenecks, recommendations } = data;
+    this.log(`Scale request for ${bottlenecks?.length || 0} bottlenecked resources`, 'info');
+
+    const results = [];
+    for (const bn of (bottlenecks || [])) {
+      const result = await this.analyzeAndRecover({
+        issue: `Resource bottleneck: ${bn.metric} at ${bn.value}% on ${bn.service} ${bn.resourceId}`,
+        bottleneck: bn,
+        source: 'scale_resources',
+      });
+      results.push(result);
+    }
+
+    return {
+      totalActions: results.length,
+      results,
+      severity: 'high',
+      confidence: 0.7,
+    };
   }
 
-  sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  /**
+   * Get a full AWS infrastructure overview
+   */
+  async getAwsOverview() {
+    const creds = await this.getAwsCredentials();
+    if (!creds) return { error: 'AWS credentials not configured' };
+
+    const aws = this.aws();
+    const [ec2, lambda, rds, alarms] = await Promise.all([
+      aws.getEC2Instances(creds).catch(() => []),
+      aws.getLambdaFunctions(creds).catch(() => []),
+      aws.getRDSInstances(creds).catch(() => []),
+      aws.getCloudWatchAlarms(creds).catch(() => []),
+    ]);
+
+    return {
+      ec2: { total: ec2.length, running: ec2.filter(i => i.state === 'running').length, stopped: ec2.filter(i => i.state === 'stopped').length, instances: ec2 },
+      lambda: { total: lambda.length, functions: lambda },
+      rds: { total: rds.length, available: rds.filter(d => d.status === 'available').length, instances: rds },
+      alarms: { total: alarms.length, inAlarm: alarms.filter(a => a.state === 'ALARM').length, alarms },
+    };
+  }
+
+  getAwsApiCall(actionType) {
+    const map = {
+      reboot_instance: 'EC2:RebootInstances',
+      stop_instance: 'EC2:StopInstances',
+      start_instance: 'EC2:StartInstances',
+      invoke_lambda: 'Lambda:Invoke',
+      reboot_rds: 'RDS:RebootDBInstance',
+    };
+    return map[actionType] || actionType;
   }
 }
 

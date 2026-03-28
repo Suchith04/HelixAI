@@ -61,6 +61,19 @@ const setupRedisSubscriptions = async () => {
     await subscribeToChannel('incident:created', (data) => {
       io?.to(`company:${data.companyId}`).emit('incident:created', data);
     });
+
+    // Recovery events for HITL
+    await subscribeToChannel('recovery:pending', (data) => {
+      io?.to(`company:${data.companyId}`).emit('recovery:pending', data);
+    });
+
+    await subscribeToChannel('recovery:executed', (data) => {
+      io?.to(`company:${data.companyId}`).emit('recovery:executed', data);
+    });
+
+    await subscribeToChannel('recovery:approved', (data) => {
+      io?.to(`company:${data.companyId}`).emit('recovery:approved', data);
+    });
   } catch (e) {
     logger.warn('Redis subscriptions not available');
   }

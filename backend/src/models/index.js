@@ -13,6 +13,7 @@ import Resource from './Resource.js';
 import Recovery from './Recovery.js';
 import Recommendation from './Recommendation.js';
 import CostAnalysis from './CostAnalysis.js';
+import PendingAction from './PendingAction.js';
 
 export {
   Company,
@@ -29,5 +30,6 @@ export {
   Resource,
   Recovery,
   Recommendation,
-  CostAnalysis
+  CostAnalysis,
+  PendingAction,
 };

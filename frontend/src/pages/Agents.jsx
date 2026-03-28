@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Bot, Play, Activity, X, Clock, TrendingUp, AlertCircle, CheckCircle2, Gauge, CloudLightning, ChevronDown, Info } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Bot, Play, Activity, X, Clock, TrendingUp, AlertCircle, CheckCircle2, Gauge, CloudLightning, ChevronDown, Info, History, Search, Filter, Calendar, BarChart3, Sparkles } from 'lucide-react';
 import { agentService, cloudwatchService } from '../services/api';
 import { onAgentState } from '../services/socket';
 
@@ -18,6 +18,14 @@ const getStatus = (agent) => {
   return statusMap[raw] || { label: raw || 'inactive', colorClass: 'bg-dark-700 text-dark-400', dotClass: 'inactive' };
 };
 const getMetric = (agent, key) => agent.currentState?.metrics?.[key] || 0;
+
+const severityConfig = {
+  critical: { bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/40', glow: 'shadow-red-500/10' },
+  high: { bg: 'bg-amber-500/20', text: 'text-amber-400', border: 'border-amber-500/40', glow: 'shadow-amber-500/10' },
+  medium: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/40', glow: 'shadow-yellow-500/10' },
+  low: { bg: 'bg-green-500/20', text: 'text-green-400', border: 'border-green-500/40', glow: 'shadow-green-500/10' },
+  unknown: { bg: 'bg-dark-700', text: 'text-dark-400', border: 'border-dark-600', glow: '' },
+};
 
 const ConfidenceGauge = ({ value = 0 }) => {
   const percentage = Math.round(value * 100);
@@ -125,11 +133,252 @@ const AgentDetailModal = ({ agent, onClose }) => (
   </div>
 );
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   History Card Component
+   ═══════════════════════════════════════════════════════════════════════════ */
+const HistoryCard = ({ entry }) => {
+  const [expanded, setExpanded] = useState(false);
+  const s = severityConfig[entry.severity] || severityConfig.unknown;
+
+  return (
+    <div className="glass-card p-5 animate-slide-in" style={{ animationDelay: '0.05s' }}>
+      {/* Header Row */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">{agentIcons[entry.agentName] || '🤖'}</span>
+          <div>
+            <h4 className="text-white font-semibold text-sm">{entry.agentDisplayName || entry.agentName}</h4>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-dark-500 text-xs font-mono">{entry.logSource}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`px-2.5 py-1 rounded-full text-xs font-bold capitalize ${s.bg} ${s.text} border ${s.border} shadow-lg ${s.glow}`}>
+            {entry.severity}
+          </span>
+          <span className="text-dark-500 text-xs">
+            {new Date(entry.createdAt).toLocaleDateString()} {new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        </div>
+      </div>
+
+      {/* Stats Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+        <div className="bg-dark-800/60 rounded-lg p-2.5 text-center">
+          <p className="text-dark-500 text-[10px] uppercase tracking-wider font-semibold">Confidence</p>
+          <p className="text-white font-bold text-sm">{(entry.confidence * 100).toFixed(0)}%</p>
+        </div>
+        <div className="bg-dark-800/60 rounded-lg p-2.5 text-center">
+          <p className="text-dark-500 text-[10px] uppercase tracking-wider font-semibold">Total Logs</p>
+          <p className="text-white font-bold text-sm">{entry.summary?.totalLogs || 0}</p>
+        </div>
+        <div className="bg-dark-800/60 rounded-lg p-2.5 text-center">
+          <p className="text-dark-500 text-[10px] uppercase tracking-wider font-semibold">Errors</p>
+          <p className="text-red-400 font-bold text-sm">{entry.summary?.errors || 0}</p>
+        </div>
+        <div className="bg-dark-800/60 rounded-lg p-2.5 text-center">
+          <p className="text-dark-500 text-[10px] uppercase tracking-wider font-semibold">Warnings</p>
+          <p className="text-amber-400 font-bold text-sm">{entry.summary?.warnings || 0}</p>
+        </div>
+        <div className="bg-dark-800/60 rounded-lg p-2.5 text-center">
+          <p className="text-dark-500 text-[10px] uppercase tracking-wider font-semibold">Patterns</p>
+          <p className="text-primary-400 font-bold text-sm">{entry.patterns?.length || 0}</p>
+        </div>
+      </div>
+
+      {/* Logs Analyzed Time Range */}
+      {(entry.logsAnalyzedFrom || entry.logsAnalyzedTo) && (
+        <div className="flex items-center gap-2 mb-4 text-xs">
+          <Calendar className="w-3.5 h-3.5 text-dark-500" />
+          <span className="text-dark-500">Logs analyzed:</span>
+          <span className="text-dark-300 font-mono">
+            {entry.logsAnalyzedFrom ? new Date(entry.logsAnalyzedFrom).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+          </span>
+          <span className="text-dark-600">→</span>
+          <span className="text-dark-300 font-mono">
+            {entry.logsAnalyzedTo ? new Date(entry.logsAnalyzedTo).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+          </span>
+        </div>
+      )}
+
+      {/* LLM Insights (always visible if present) */}
+      {entry.llmInsights && (
+        <div className="bg-gradient-to-br from-primary-500/10 to-primary-600/5 border border-primary-500/20 rounded-xl p-4 mb-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Sparkles className="w-4 h-4 text-primary-400" />
+            <h5 className="text-primary-400 text-xs font-semibold uppercase tracking-wider">AI Insights</h5>
+          </div>
+          <p className="text-dark-200 text-sm leading-relaxed whitespace-pre-wrap">
+            {typeof entry.llmInsights === 'string'
+              ? entry.llmInsights.length > 500 && !expanded
+                ? entry.llmInsights.substring(0, 500) + '...'
+                : entry.llmInsights
+              : JSON.stringify(entry.llmInsights, null, 2).substring(0, expanded ? undefined : 500)}
+          </p>
+        </div>
+      )}
+
+      {/* Expand toggle */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center justify-center gap-1.5 py-2 text-dark-500 hover:text-dark-300 text-xs transition-colors"
+      >
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+        {expanded ? 'Show Less' : 'Show More'}
+      </button>
+
+      {/* Expanded Details */}
+      {expanded && (
+        <div className="mt-2 space-y-3 animate-slide-in">
+          {/* CloudWatch Meta */}
+          {entry.cloudwatchMeta && (
+            <div className="bg-dark-800/40 border border-dark-700 rounded-lg p-3">
+              <h5 className="text-dark-400 text-xs font-semibold mb-2 flex items-center gap-1.5">
+                <CloudLightning className="w-3.5 h-3.5" /> CloudWatch Metadata
+              </h5>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div><span className="text-dark-500">Log Group: </span><span className="text-dark-300 font-mono">{entry.cloudwatchMeta.logGroupName}</span></div>
+                <div><span className="text-dark-500">Total Raw: </span><span className="text-white font-semibold">{entry.cloudwatchMeta.totalRaw}</span></div>
+                <div><span className="text-dark-500">Important: </span><span className="text-primary-400 font-semibold">{entry.cloudwatchMeta.totalImportant}</span></div>
+                <div><span className="text-dark-500">Reduction: </span><span className="text-green-400 font-semibold">{entry.cloudwatchMeta.reductionRatio}</span></div>
+              </div>
+            </div>
+          )}
+
+          {/* Patterns */}
+          {entry.patterns && entry.patterns.length > 0 && (
+            <div className="bg-dark-800/40 border border-dark-700 rounded-lg p-3">
+              <h5 className="text-dark-400 text-xs font-semibold mb-2 flex items-center gap-1.5">
+                <BarChart3 className="w-3.5 h-3.5" /> Detected Patterns
+              </h5>
+              <div className="space-y-1.5">
+                {entry.patterns.map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary-500 flex-shrink-0" />
+                    <span className="text-dark-300">{p.description || JSON.stringify(p)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Raw JSON */}
+          <details className="group">
+            <summary className="cursor-pointer text-dark-500 hover:text-dark-300 text-xs font-medium flex items-center gap-1.5 py-1 outline-none select-none">
+              <ChevronDown className="w-3 h-3 group-open:-rotate-180 transition-transform duration-200" />
+              Raw Data
+            </summary>
+            <div className="mt-2 bg-dark-900/60 border border-dark-700/50 rounded-lg p-3 text-dark-400 text-[10px] whitespace-pre-wrap font-mono max-h-48 overflow-y-auto custom-scrollbar">
+              {JSON.stringify(entry, null, 2)}
+            </div>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   History Panel Component
+   ═══════════════════════════════════════════════════════════════════════════ */
+const HistoryPanel = ({ refreshKey }) => {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterAgent, setFilterAgent] = useState('');
+  const [filterSource, setFilterSource] = useState('');
+
+  const loadHistory = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (filterAgent) params.agentName = filterAgent;
+      if (filterSource) params.logSource = filterSource;
+      const res = await agentService.getAgentHistory(params);
+      setHistory(res.data.history || []);
+    } catch (err) {
+      console.error('Failed to load history:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [filterAgent, filterSource]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory, refreshKey]);
+
+  // Compute unique agents and sources from loaded history
+  const uniqueAgents = [...new Set(history.map(h => h.agentName))];
+  const uniqueSources = [...new Set(history.map(h => h.logSource))];
+
+  return (
+    <div className="space-y-4">
+      {/* Filters Row */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-dark-500" />
+          <span className="text-dark-500 text-xs font-semibold uppercase tracking-wider">Filter:</span>
+        </div>
+
+        {/* Agent Filter */}
+        <select
+          value={filterAgent}
+          onChange={(e) => setFilterAgent(e.target.value)}
+          className="bg-dark-800 border border-dark-700 rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-primary-500/50 transition-colors cursor-pointer"
+        >
+          <option value="">All Agents</option>
+          {uniqueAgents.map(a => (
+            <option key={a} value={a}>{agentIcons[a] || '🤖'} {a}</option>
+          ))}
+        </select>
+
+        {/* Source Filter */}
+        <select
+          value={filterSource}
+          onChange={(e) => setFilterSource(e.target.value)}
+          className="bg-dark-800 border border-dark-700 rounded-lg px-3 py-1.5 text-sm text-white outline-none focus:border-primary-500/50 transition-colors cursor-pointer"
+        >
+          <option value="">All Sources</option>
+          {uniqueSources.map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+
+        <span className="text-dark-600 text-xs ml-auto">{history.length} entries</span>
+      </div>
+
+      {/* History Entries */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-500" />
+        </div>
+      ) : history.length === 0 ? (
+        <div className="text-center py-16">
+          <History className="w-12 h-12 text-dark-700 mx-auto mb-4" />
+          <h4 className="text-dark-400 font-semibold mb-1">No Analysis History Yet</h4>
+          <p className="text-dark-600 text-sm">Trigger an agent to generate your first analysis entry.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {history.map(entry => (
+            <HistoryCard key={entry._id} entry={entry} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Main Agents Page
+   ═══════════════════════════════════════════════════════════════════════════ */
 const Agents = () => {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+
+  // Tabs: 'agents' or 'history'
+  const [activeTab, setActiveTab] = useState('agents');
 
   // CloudWatch log group state
   const [logGroups, setLogGroups] = useState([]);
@@ -180,6 +429,8 @@ const Agents = () => {
       });
       setLastResult(res.data.result);
       setLastCloudwatchMeta(res.data.cloudwatchMeta);
+      // Refresh history after new trigger
+      setHistoryRefreshKey(k => k + 1);
     } catch (e) { console.error(e); }
     finally { setTriggering(null); }
   };
@@ -222,8 +473,34 @@ const Agents = () => {
         </div>
       </div>
 
-      {/* ── CloudWatch Log Group Selector ──────────────────────────────────── */}
-      <div className="glass-card p-5">
+      {/* ── Tab Navigation ─────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 bg-dark-800/50 border border-dark-700 rounded-xl p-1">
+        <button
+          onClick={() => setActiveTab('agents')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
+            activeTab === 'agents'
+              ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/20'
+              : 'text-dark-400 hover:text-white hover:bg-dark-700/50'
+          }`}
+        >
+          <Bot className="w-4 h-4" />
+          Agents
+        </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
+            activeTab === 'history'
+              ? 'bg-gradient-to-r from-purple-600 to-primary-600 text-white shadow-lg shadow-primary-600/20'
+              : 'text-dark-400 hover:text-white hover:bg-dark-700/50'
+          }`}
+        >
+          <History className="w-4 h-4" />
+          Analysis History
+        </button>
+      </div>
+
+      {/* ── CloudWatch Log Group Selector (Only visible for Agents tab)*/}
+      {activeTab === 'agents' && (<div className="glass-card p-5">
         <div className="flex items-center gap-3 mb-3">
           <CloudLightning className="w-5 h-5 text-primary-400" />
           <h2 className="text-lg font-semibold text-white">CloudWatch Log Source</h2>
@@ -268,149 +545,174 @@ const Agents = () => {
             </div>
           )}
         </div>
-      </div>
+      </div>)}
 
-      {/* ── CloudWatch Meta & Last Result ──────────────────────────────────── */}
-      {lastCloudwatchMeta && (
-        <div className="glass-card p-5 border-l-4 border-primary-500">
-          <div className="flex items-center gap-3 mb-3">
-            <CloudLightning className="w-5 h-5 text-primary-400" />
-            <h3 className="text-white font-semibold">CloudWatch Logs Used — {lastTriggeredAgent}</h3>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-dark-800/50 rounded-xl p-3">
-              <p className="text-dark-400 text-xs">Log Group</p>
-              <p className="text-white text-sm font-mono truncate">{lastCloudwatchMeta.logGroupName}</p>
-            </div>
-            <div className="bg-dark-800/50 rounded-xl p-3">
-              <p className="text-dark-400 text-xs">Total Raw Logs</p>
-              <p className="text-white font-bold text-lg">{lastCloudwatchMeta.totalRaw}</p>
-            </div>
-            <div className="bg-primary-500/10 border border-primary-500/30 rounded-xl p-3">
-              <p className="text-dark-400 text-xs">Important (Fed to AI)</p>
-              <p className="text-primary-400 font-bold text-lg">{lastCloudwatchMeta.totalImportant}</p>
-            </div>
-            <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-3">
-              <p className="text-dark-400 text-xs">Noise Reduction</p>
-              <p className="text-green-400 font-bold text-lg">{lastCloudwatchMeta.reductionRatio}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {lastResult && (
-        <div className="glass-card p-5 animate-slide-in">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-5 gap-4">
-            <h3 className="text-white text-lg font-semibold flex items-center gap-2">
-              <Bot className="w-5 h-5 text-primary-400" />
-              Agent Analysis Result — {lastTriggeredAgent}
-            </h3>
-            <div className={`px-4 py-1.5 rounded-full text-sm font-bold flex items-center gap-2 shadow-lg ${
-              lastResult.severity === 'critical' || lastResult.severity === 'high' || (lastResult.errors && lastResult.errors.length > 0)
-                ? 'bg-red-500/20 text-red-400 border border-red-500/40 shadow-red-500/10'
-                : 'bg-green-500/20 text-green-400 border border-green-500/40 shadow-green-500/10'
-            }`}>
-              {lastResult.severity === 'critical' || lastResult.severity === 'high' || (lastResult.errors && lastResult.errors.length > 0) ? (
-                <><AlertCircle className="w-4 h-4" /> Issues Detected (Failed)</>
-              ) : (
-                <><CheckCircle2 className="w-4 h-4" /> All Clear (Passed)</>
-              )}
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4 mb-5">
-            <div className="bg-dark-800/70 rounded-xl p-4 border border-dark-700 flex flex-col justify-center">
-              <h4 className="text-dark-400 text-xs uppercase tracking-wider mb-1 font-semibold">Severity Assessment</h4>
-              <p className={`text-xl font-bold capitalize mt-1 ${
-                lastResult.severity === 'critical' ? 'text-red-500' :
-                lastResult.severity === 'high' ? 'text-amber-500' :
-                lastResult.severity === 'medium' ? 'text-yellow-400' : 'text-green-400'
-              }`}>{lastResult.severity || 'Unknown'}</p>
-            </div>
-            {lastResult.confidence !== undefined && (
-              <div className="bg-dark-800/70 rounded-xl p-4 border border-dark-700 flex flex-col justify-center">
-                 <h4 className="text-dark-400 text-xs uppercase tracking-wider mb-2 font-semibold">AI Confidence Score</h4>
-                 <div className="flex items-center gap-3">
-                   <div className="flex-1 bg-dark-900 rounded-full h-2.5 overflow-hidden shadow-inner tracking-wide">
-                     <div className={`h-full rounded-full ${lastResult.confidence > 0.7 ? 'bg-green-500' : lastResult.confidence > 0.4 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${(lastResult.confidence * 100).toFixed(0)}%` }}></div>
-                   </div>
-                   <span className="text-white font-bold text-lg">{(lastResult.confidence * 100).toFixed(0)}%</span>
-                 </div>
+      {/* ════════════════════════════════════════════════════════════════════
+           AGENTS TAB
+           ════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'agents' && (
+        <>
+          {/* ── CloudWatch Meta & Last Result ──────────────────────────────── */}
+          {lastCloudwatchMeta && (
+            <div className="glass-card p-5 border-l-4 border-primary-500">
+              <div className="flex items-center gap-3 mb-3">
+                <CloudLightning className="w-5 h-5 text-primary-400" />
+                <h3 className="text-white font-semibold">CloudWatch Logs Used — {lastTriggeredAgent}</h3>
               </div>
-            )}
-          </div>
-
-          {(lastResult.llmInsights || lastResult.llmInsights === "") && (
-            <div className="bg-gradient-to-br from-primary-500/10 to-primary-600/5 border border-primary-500/30 rounded-xl p-5 mb-5 shadow-lg shadow-primary-500/5">
-              <h4 className="text-primary-400 text-sm font-semibold mb-3 flex items-center gap-2">
-                <CloudLightning className="w-5 h-5" /> AI Log Intelligence Insights
-              </h4>
-              <p className="text-dark-100 text-sm leading-relaxed whitespace-pre-wrap">{typeof lastResult.llmInsights === 'string' ? lastResult.llmInsights : JSON.stringify(lastResult.llmInsights, null, 2)}</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-dark-800/50 rounded-xl p-3">
+                  <p className="text-dark-400 text-xs">Log Group</p>
+                  <p className="text-white text-sm font-mono truncate">{lastCloudwatchMeta.logGroupName}</p>
+                </div>
+                <div className="bg-dark-800/50 rounded-xl p-3">
+                  <p className="text-dark-400 text-xs">Total Raw Logs</p>
+                  <p className="text-white font-bold text-lg">{lastCloudwatchMeta.totalRaw}</p>
+                </div>
+                <div className="bg-primary-500/10 border border-primary-500/30 rounded-xl p-3">
+                  <p className="text-dark-400 text-xs">Important (Fed to AI)</p>
+                  <p className="text-primary-400 font-bold text-lg">{lastCloudwatchMeta.totalImportant}</p>
+                </div>
+                <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-3">
+                  <p className="text-dark-400 text-xs">Noise Reduction</p>
+                  <p className="text-green-400 font-bold text-lg">{lastCloudwatchMeta.reductionRatio}</p>
+                </div>
+              </div>
             </div>
           )}
 
-          <div className="bg-dark-800/40 border border-dark-700 hover:border-dark-600 transition-colors rounded-xl overflow-hidden">
-            <details className="group">
-              <summary className="p-4 cursor-pointer text-dark-300 hover:text-white transition-colors text-sm font-medium flex items-center outline-none select-none">
-                <ChevronDown className="w-4 h-4 mr-2 group-open:-rotate-180 transition-transform duration-200" />
-                Raw Data Payload
-              </summary>
-              <div className="p-4 pt-0 border-t border-dark-700/50 bg-dark-900/50 text-dark-400 text-xs whitespace-pre-wrap font-mono max-h-60 overflow-y-auto custom-scrollbar">
-                {JSON.stringify(lastResult, null, 2)}
+          {lastResult && (
+            <div className="glass-card p-5 animate-slide-in">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-5 gap-4">
+                <h3 className="text-white text-lg font-semibold flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-primary-400" />
+                  Agent Analysis Result — {lastTriggeredAgent}
+                </h3>
+                <div className={`px-4 py-1.5 rounded-full text-sm font-bold flex items-center gap-2 shadow-lg ${
+                  lastResult.severity === 'critical' || lastResult.severity === 'high' || (lastResult.errors && lastResult.errors.length > 0)
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/40 shadow-red-500/10'
+                    : 'bg-green-500/20 text-green-400 border border-green-500/40 shadow-green-500/10'
+                }`}>
+                  {lastResult.severity === 'critical' || lastResult.severity === 'high' || (lastResult.errors && lastResult.errors.length > 0) ? (
+                    <><AlertCircle className="w-4 h-4" /> Issues Detected (Failed)</>
+                  ) : (
+                    <><CheckCircle2 className="w-4 h-4" /> All Clear (Passed)</>
+                  )}
+                </div>
               </div>
-            </details>
+              
+              <div className="grid grid-cols-2 gap-4 mb-5">
+                <div className="bg-dark-800/70 rounded-xl p-4 border border-dark-700 flex flex-col justify-center">
+                  <h4 className="text-dark-400 text-xs uppercase tracking-wider mb-1 font-semibold">Severity Assessment</h4>
+                  <p className={`text-xl font-bold capitalize mt-1 ${
+                    lastResult.severity === 'critical' ? 'text-red-500' :
+                    lastResult.severity === 'high' ? 'text-amber-500' :
+                    lastResult.severity === 'medium' ? 'text-yellow-400' : 'text-green-400'
+                  }`}>{lastResult.severity || 'Unknown'}</p>
+                </div>
+                {lastResult.confidence !== undefined && (
+                  <div className="bg-dark-800/70 rounded-xl p-4 border border-dark-700 flex flex-col justify-center">
+                     <h4 className="text-dark-400 text-xs uppercase tracking-wider mb-2 font-semibold">AI Confidence Score</h4>
+                     <div className="flex items-center gap-3">
+                       <div className="flex-1 bg-dark-900 rounded-full h-2.5 overflow-hidden shadow-inner tracking-wide">
+                         <div className={`h-full rounded-full ${lastResult.confidence > 0.7 ? 'bg-green-500' : lastResult.confidence > 0.4 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${(lastResult.confidence * 100).toFixed(0)}%` }}></div>
+                       </div>
+                       <span className="text-white font-bold text-lg">{(lastResult.confidence * 100).toFixed(0)}%</span>
+                     </div>
+                  </div>
+                )}
+              </div>
+
+              {(lastResult.llmInsights || lastResult.llmInsights === "") && (
+                <div className="bg-gradient-to-br from-primary-500/10 to-primary-600/5 border border-primary-500/30 rounded-xl p-5 mb-5 shadow-lg shadow-primary-500/5">
+                  <h4 className="text-primary-400 text-sm font-semibold mb-3 flex items-center gap-2">
+                    <CloudLightning className="w-5 h-5" /> AI Log Intelligence Insights
+                  </h4>
+                  <p className="text-dark-100 text-sm leading-relaxed whitespace-pre-wrap">{typeof lastResult.llmInsights === 'string' ? lastResult.llmInsights : JSON.stringify(lastResult.llmInsights, null, 2)}</p>
+                </div>
+              )}
+
+              <div className="bg-dark-800/40 border border-dark-700 hover:border-dark-600 transition-colors rounded-xl overflow-hidden">
+                <details className="group">
+                  <summary className="p-4 cursor-pointer text-dark-300 hover:text-white transition-colors text-sm font-medium flex items-center outline-none select-none">
+                    <ChevronDown className="w-4 h-4 mr-2 group-open:-rotate-180 transition-transform duration-200" />
+                    Raw Data Payload
+                  </summary>
+                  <div className="p-4 pt-0 border-t border-dark-700/50 bg-dark-900/50 text-dark-400 text-xs whitespace-pre-wrap font-mono max-h-60 overflow-y-auto custom-scrollbar">
+                    {JSON.stringify(lastResult, null, 2)}
+                  </div>
+                </details>
+              </div>
+            </div>
+          )}
+
+          {/* Agent Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {agents.map(agent => (
+              <div key={agent._id} onClick={() => setSelectedAgent(agent)} className="glass-card p-6 cursor-pointer">
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">{agentIcons[agent.name] || '🤖'}</span>
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">{agent.displayName || agent.name}</h3>
+                      <p className="text-dark-400 text-sm">{agent.type}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className={`status-dot ${getStatus(agent).dotClass}`} />
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatus(agent).colorClass}`}>
+                      {getStatus(agent).label}
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-dark-300 text-sm mb-4">{agent.description}</p>
+
+                {/* Confidence Gauge + Metrics */}
+                <div className="flex items-center gap-4 mb-4">
+                  <ConfidenceGauge value={agent.currentState?.confidence || 0} />
+                  <div className="flex-1 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-dark-400">Tasks</span>
+                      <span className="text-white font-semibold">{getMetric(agent, 'tasksCompleted')}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-dark-400">Success</span>
+                      <span className="text-white font-semibold">{((getMetric(agent, 'successRate')) * 100).toFixed(0)}%</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-dark-400">Errors</span>
+                      <span className="text-white font-semibold">{getMetric(agent, 'errorCount')}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <button onClick={(e) => handleTrigger(e, agent)} disabled={triggering === agent.name} className="w-full flex items-center justify-center gap-2 py-2.5 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors disabled:opacity-50">
+                  {triggering === agent.name ? <Activity className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  {triggering === agent.name ? 'Running...' : 'Trigger'}
+                </button>
+              </div>
+            ))}
           </div>
-        </div>
+        </>
       )}
 
-      {/* Agent Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {agents.map(agent => (
-          <div key={agent._id} onClick={() => setSelectedAgent(agent)} className="glass-card p-6 cursor-pointer">
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <span className="text-3xl">{agentIcons[agent.name] || '🤖'}</span>
-                <div>
-                  <h3 className="text-lg font-semibold text-white">{agent.displayName || agent.name}</h3>
-                  <p className="text-dark-400 text-sm">{agent.type}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`status-dot ${getStatus(agent).dotClass}`} />
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatus(agent).colorClass}`}>
-                  {getStatus(agent).label}
-                </span>
-              </div>
+      {/* ════════════════════════════════════════════════════════════════════
+           HISTORY TAB
+           ════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'history' && (
+        <div>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-primary-600 flex items-center justify-center shadow-lg shadow-primary-600/20">
+              <History className="w-5 h-5 text-white" />
             </div>
-
-            <p className="text-dark-300 text-sm mb-4">{agent.description}</p>
-
-            {/* Confidence Gauge + Metrics */}
-            <div className="flex items-center gap-4 mb-4">
-              <ConfidenceGauge value={agent.currentState?.confidence || 0} />
-              <div className="flex-1 space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-dark-400">Tasks</span>
-                  <span className="text-white font-semibold">{getMetric(agent, 'tasksCompleted')}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-dark-400">Success</span>
-                  <span className="text-white font-semibold">{((getMetric(agent, 'successRate')) * 100).toFixed(0)}%</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-dark-400">Errors</span>
-                  <span className="text-white font-semibold">{getMetric(agent, 'errorCount')}</span>
-                </div>
-              </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">Analysis History</h2>
+              <p className="text-dark-500 text-sm">Browse past agent analyses grouped by agent + log source</p>
             </div>
-
-            <button onClick={(e) => handleTrigger(e, agent)} disabled={triggering === agent.name} className="w-full flex items-center justify-center gap-2 py-2.5 bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors disabled:opacity-50">
-              {triggering === agent.name ? <Activity className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              {triggering === agent.name ? 'Running...' : 'Trigger'}
-            </button>
           </div>
-        ))}
-      </div>
+          <HistoryPanel refreshKey={historyRefreshKey} />
+        </div>
+      )}
 
       {/* Detail Modal */}
       {selectedAgent && <AgentDetailModal agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
@@ -419,4 +721,3 @@ const Agents = () => {
 };
 
 export default Agents;
-

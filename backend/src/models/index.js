@@ -2,6 +2,7 @@ import Company from './Company.js';
 import User from './User.js';
 import Agent from './Agent.js';
 import AgentState from './AgentState.js';
+import AgentHistory from './AgentHistory.js';
 import Workflow from './Workflow.js';
 import WorkflowExecution from './WorkflowExecution.js';
 import Message from './Message.js';
@@ -18,6 +19,7 @@ export {
   User,
   Agent,
   AgentState,
+  AgentHistory,
   Workflow,
   WorkflowExecution,
   Message,

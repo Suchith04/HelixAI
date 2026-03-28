@@ -182,6 +182,25 @@ class BaseAgent {
     }
 
     await this.updateState({ memory: this.state.memory });
+
+    // Persist to MongoDB AgentState collection
+    try {
+      await AgentState.findOneAndUpdate(
+        { company: this.companyId, agentName: this.name },
+        {
+          $push: {
+            memory: {
+              $each: [memory],
+              $position: 0,
+              $slice: 100,
+            },
+          },
+          $set: { confidence: this.state.confidence },
+        }
+      );
+    } catch (err) {
+      this.log(`Failed to persist memory to MongoDB: ${err.message}`, 'warn');
+    }
   }
 
   /**

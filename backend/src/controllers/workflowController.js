@@ -25,7 +25,8 @@ const hasCycle = (nodes, edges) => {
   return nodes.some(n => color[n.id] === WHITE && dfs(n.id));
 };
 
-// Get all workflows
+// ─── CRUD ─────────────────────────────────────────────────────────────────────
+
 export const getWorkflows = async (req, res, next) => {
   try {
     const workflows = await Workflow.find({ company: req.companyId }).sort({ createdAt: -1 });
@@ -35,7 +36,6 @@ export const getWorkflows = async (req, res, next) => {
   }
 };
 
-// Get workflow by ID
 export const getWorkflow = async (req, res, next) => {
   try {
     const workflow = await Workflow.findOne({ company: req.companyId, _id: req.params.id });
@@ -46,7 +46,6 @@ export const getWorkflow = async (req, res, next) => {
   }
 };
 
-// Create workflow
 export const createWorkflow = async (req, res, next) => {
   try {
     if (req.body.graph && hasCycle(req.body.graph.nodes, req.body.graph.edges)) {
@@ -59,7 +58,6 @@ export const createWorkflow = async (req, res, next) => {
   }
 };
 
-// Update workflow
 export const updateWorkflow = async (req, res, next) => {
   try {
     if (req.body.graph && hasCycle(req.body.graph.nodes, req.body.graph.edges)) {
@@ -77,7 +75,6 @@ export const updateWorkflow = async (req, res, next) => {
   }
 };
 
-// Delete workflow
 export const deleteWorkflow = async (req, res, next) => {
   try {
     const workflow = await Workflow.findOneAndDelete({ company: req.companyId, _id: req.params.id, isSystem: false });
@@ -88,7 +85,8 @@ export const deleteWorkflow = async (req, res, next) => {
   }
 };
 
-// Execute workflow
+// ─── Execution ────────────────────────────────────────────────────────────────
+
 export const executeWorkflow = async (req, res, next) => {
   try {
     let execution;
@@ -103,7 +101,6 @@ export const executeWorkflow = async (req, res, next) => {
       const workflow = await Workflow.findOne({ company: req.companyId, _id: req.params.id });
       if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
 
-      // Convert graph-based workflows to steps if needed
       let steps = workflow.steps || [];
       if ((!steps || steps.length === 0) && workflow.graph?.nodes?.length) {
         steps = workflow.graph.nodes.map((node, idx) => ({
@@ -123,7 +120,6 @@ export const executeWorkflow = async (req, res, next) => {
         startTime: new Date(),
         endTime: new Date(),
         totalSteps: steps.length,
-        completedSteps: steps.length,
         initialData: req.body.data || {},
         steps: steps.map((step, idx) => ({
           stepOrder: step.order || idx + 1,
@@ -132,9 +128,12 @@ export const executeWorkflow = async (req, res, next) => {
           status: 'completed',
           startTime: new Date(),
           endTime: new Date(),
-          result: { message: `${step.agent} processed successfully (direct execution)` },
+          severity: 'low',
+          confidence: 0.5,
+          output: { message: `${step.agent} processed successfully (direct execution)` },
         })),
-        result: { message: 'Workflow executed successfully (direct mode)' },
+        overallSeverity: 'low',
+        overallConfidence: 0.5,
       });
     }
     res.json({ execution });
@@ -143,23 +142,60 @@ export const executeWorkflow = async (req, res, next) => {
   }
 };
 
-// Get workflow executions
+// ─── Executions list ──────────────────────────────────────────────────────────
+
 export const getExecutions = async (req, res, next) => {
   try {
     const executions = await WorkflowExecution.find({ company: req.companyId })
-      .sort({ createdAt: -1 }).limit(50).populate('workflow', 'name');
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate('workflow', 'name')
+      .select('-finalResult -context -logs'); // exclude heavy fields from list
     res.json({ executions });
   } catch (error) {
     next(error);
   }
 };
 
-// Get execution by ID
+// ─── Full execution detail ────────────────────────────────────────────────────
+
 export const getExecution = async (req, res, next) => {
   try {
-    const execution = await WorkflowExecution.findOne({ company: req.companyId, _id: req.params.id });
+    const execution = await WorkflowExecution.findOne({
+      company: req.companyId,
+      _id: req.params.id,
+    }).populate('workflow', 'name description');
+
     if (!execution) return res.status(404).json({ error: 'Execution not found' });
-    res.json({ execution });
+
+    // Build a rich response with computed summary statistics
+    const completedSteps = execution.steps.filter(s => s.status === 'completed');
+    const failedSteps    = execution.steps.filter(s => s.status === 'failed');
+    const skippedSteps   = execution.steps.filter(s => s.status === 'skipped');
+
+    const stepsWithInsights = execution.steps.map(s => ({
+      ...s.toObject(),
+      durationFormatted: s.duration ? `${(s.duration / 1000).toFixed(2)}s` : null,
+      hasInsights: !!(s.llmInsights),
+    }));
+
+    res.json({
+      execution: {
+        ...execution.toObject(),
+        steps: stepsWithInsights,
+      },
+      summary: {
+        totalSteps:     execution.totalSteps || execution.steps.length,
+        completedSteps: completedSteps.length,
+        failedSteps:    failedSteps.length,
+        skippedSteps:   skippedSteps.length,
+        totalDuration:  execution.duration,
+        overallSeverity:   execution.overallSeverity,
+        overallConfidence: execution.overallConfidence,
+        hasConsolidatedInsight: !!execution.consolidatedInsight,
+        contextPipelineLength: execution.contextPipeline?.length || 0,
+      },
+    });
   } catch (error) {
     next(error);
   }

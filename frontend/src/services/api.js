@@ -63,6 +63,7 @@ export const workflowService = {
   deleteWorkflow: (id) => api.delete(`/workflows/${id}`),
   executeWorkflow: (id, data) => api.post(`/workflows/${id}/execute`, data),
   getExecutions: () => api.get('/workflows/executions'),
+  getExecution: (id) => api.get(`/workflows/executions/${id}`),
 };
 
 

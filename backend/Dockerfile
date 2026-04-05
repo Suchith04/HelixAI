@@ -18,6 +18,9 @@ COPY . .
 # Remove .env (will be provided via Docker/environment)
 RUN rm -f .env
 
+# Create logs directory and fix permissions
+RUN mkdir -p logs && chown -R appuser:appgroup /app
+
 # Switch to non-root user
 USER appuser
 

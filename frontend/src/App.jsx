@@ -12,11 +12,12 @@ import WorkflowBuilder from './pages/WorkflowBuilder';
 import Settings from './pages/Settings';
 import Logs from './pages/Logs';
 import ActionCenter from './pages/ActionCenter';
+import LandingPage from './pages/LandingPage';
 
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-dark-950"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500" /></div>;
-  return isAuthenticated ? children : <Navigate to="/login" />;
+  return isAuthenticated ? children : <Navigate to="/dashboard" />;
 };
 
 const PublicRoute = ({ children }) => {
@@ -30,6 +31,7 @@ function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
+          <Route path="/dashboard" element={<PublicRoute><LandingPage /></PublicRoute>} />
           <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
           <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>

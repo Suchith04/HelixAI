@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Zap, Building, User, Mail, Lock } from 'lucide-react';
+import { Zap, Building, User, Mail, Lock, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const Register = () => {
@@ -28,6 +28,28 @@ const Register = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-dark-950 relative overflow-hidden py-12">
+
+      <Link 
+        to="/dashboard" 
+        style={{
+          position: "absolute",
+          top: "2rem",
+          left: "2.5rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          color: "#94a3b8",
+          textDecoration: "none",
+          fontWeight: 500,
+          zIndex: 50,
+          transition: "color 0.2s ease",
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.color = "#f8fafc"}
+        onMouseLeave={(e) => e.currentTarget.style.color = "#94a3b8"}
+      >
+        <ArrowLeft size={20} />
+        Back
+      </Link>
       <div className="absolute inset-0 bg-gradient-to-br from-primary-900/20 via-transparent to-purple-900/20" />
       
       <div className="relative z-10 w-full max-w-md p-8">

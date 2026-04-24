@@ -170,59 +170,61 @@ export class AgentOrchestrator {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  CloudWatch log injection helper
+  //  CloudWatch log fetch helper (one-time per workflow)
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Attempt to fetch & filter CloudWatch logs for a given step.
+   * Fetch & filter CloudWatch logs for the entire workflow using the
+   * user-selected log group. Called ONCE at workflow start.
    * Returns { logs, meta } or null if AWS is not configured / fetch fails.
    */
-  async _injectCloudWatchLogs(stepAgentName) {
+  async _fetchWorkflowLogs(logGroupName) {
     try {
+      if (!logGroupName) {
+        logger.info('[Orchestrator][CW] No log group specified for workflow');
+        return null;
+      }
+
       const company = await Company.findById(this.companyId);
       if (!company?.awsCredentials?.isConfigured) return null;
 
       const creds = company.getAwsCredentials();
       if (!creds?.accessKeyId) return null;
 
-      // Heuristic: pick a relevant log group based on agent type
-      const logGroupHints = {
-        LogIntelligence:       '/aws/lambda',
-        CrashDiagnostic:       '/aws/ec2',
-        AnomalyDetection:      '/aws/ecs',
-        ResourceOptimization:  '/aws/ec2',
-        Recovery:              '/aws/lambda',
-        Recommendation:        '/aws/ecs',
-        CostOptimization:      '/aws/lambda',
-      };
-
-      // Use first available log group or the hinted prefix
-      const hint = logGroupHints[stepAgentName] || '/aws';
-      const rawLogs = await fetchLogs(creds, hint, {
-        limit: 200,
-        startTime: new Date(Date.now() - 6 * 60 * 60 * 1000), // last 6h
+      const rawLogs = await fetchLogs(creds, logGroupName, {
+        startTime: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        endTime: new Date().toISOString(),
+        limit: 1000,
       });
 
+      if (!rawLogs || rawLogs.length === 0) {
+        logger.warn(`[Orchestrator][CW] No logs found in ${logGroupName}`);
+        return null;
+      }
+
+      // Compute stats for metadata but give agents ALL raw logs
+      // so they can do their own filtering
       const filtered = filterAndGroupLogs(rawLogs, {
-        maxCritical: 50,
-        maxWarnings: 30,
-        maxInfoSample: 10,
+        maxCritical: 100,
+        maxWarnings: 50,
+        maxInfoSample: 20,
       });
 
-      logger.info(`[Orchestrator][CW] Injected ${filtered.important.length} logs for step ${stepAgentName}`);
+      logger.info(`[Orchestrator][CW] Fetched ${rawLogs.length} logs from ${logGroupName} for workflow (${filtered.meta.totalImportant} important)`);
 
       return {
-        logs: filtered.important,
+        logs: rawLogs,
         meta: {
           injected: true,
-          logCount: filtered.important.length,
-          logGroup: hint,
+          logCount: rawLogs.length,
+          logGroup: logGroupName,
           reductionRatio: filtered.meta.reductionRatio,
           totalRaw: filtered.meta.totalRaw,
+          totalImportant: filtered.meta.totalImportant,
         },
       };
     } catch (err) {
-      logger.warn(`[Orchestrator][CW] Log injection failed for ${stepAgentName}: ${err.message}`);
+      logger.warn(`[Orchestrator][CW] Log fetch failed for workflow: ${err.message}`);
       return null;
     }
   }
@@ -236,9 +238,58 @@ export class AgentOrchestrator {
       return { llmInsights: null, severity: 'low', confidence: 0, contextKeys: [] };
     }
 
-    const llmInsights = result.llmInsights ?? result.insights ?? result.analysis ?? null;
-    const severity    = result.severity ?? 'low';
-    const confidence  = typeof result.confidence === 'number' ? result.confidence : 0;
+    // Try explicit insight fields first
+    let llmInsights = result.llmInsights ?? result.insights ?? result.analysis ?? null;
+
+    // If no explicit insights, synthesize from the result data
+    if (!llmInsights) {
+      const parts = [];
+
+      // CrashDiagnostic results
+      if (result.investigationsCompleted !== undefined) {
+        parts.push(`Investigated ${result.investigationsCompleted} crash(es), identified ${result.rootCausesIdentified || 0} root cause(s).`);
+        if (result.awsContext) {
+          const aws = result.awsContext;
+          parts.push(`AWS: ${aws.unhealthyEC2 || 0} unhealthy EC2, ${aws.lambdaWithErrors || 0} Lambda errors, ${aws.activeAlarms || 0} active alarms.`);
+        }
+        if (result.action) parts.push(`Action taken: ${result.action.replace(/_/g, ' ')}.`);
+        if (result.investigations?.length > 0) {
+          for (const inv of result.investigations.slice(0, 3)) {
+            if (inv.rootCause?.description) parts.push(`Root cause: ${inv.rootCause.description}`);
+            if (inv.suggestedActions?.length) parts.push(`Suggested: ${inv.suggestedActions.join(', ')}`);
+          }
+        }
+      }
+
+      // LogIntelligence results
+      if (result.totalLogs !== undefined) {
+        parts.push(`Analyzed ${result.totalLogs} log entries.`);
+        if (result.categorized) {
+          parts.push(`Found ${result.categorized.errors || 0} errors, ${result.categorized.warnings || 0} warnings, ${result.categorized.info || 0} info.`);
+        }
+        if (result.patterns?.length > 0) {
+          parts.push(`Detected ${result.patterns.length} pattern(s): ${result.patterns.map(p => p.description).join('; ')}`);
+        }
+        if (result.errors?.length > 0) {
+          parts.push(`Top error: ${result.errors[0].signature || 'unknown'} (${result.errors[0].count || 1} occurrences)`);
+        }
+      }
+
+      // Recommendation / generic results
+      if (result.recommendations?.length > 0) {
+        parts.push(`Recommendations: ${result.recommendations.slice(0, 3).map(r => typeof r === 'string' ? r : r.title || r.description || JSON.stringify(r)).join('; ')}`);
+      }
+      if (result.summary) {
+        parts.push(typeof result.summary === 'string' ? result.summary : JSON.stringify(result.summary));
+      }
+
+      if (parts.length > 0) {
+        llmInsights = parts.join(' ');
+      }
+    }
+
+    const severity = result.severity ?? 'low';
+    const confidence = typeof result.confidence === 'number' ? result.confidence : 0;
 
     // Gather meaningful context keys to pass forward
     const contextKeys = Object.keys(result).filter(k =>
@@ -287,8 +338,8 @@ Respond as JSON:
         confidence: s.confidence,
         insights: s.llmInsights
           ? (typeof s.llmInsights === 'string'
-              ? s.llmInsights.substring(0, 500)
-              : JSON.stringify(s.llmInsights).substring(0, 500))
+            ? s.llmInsights.substring(0, 500)
+            : JSON.stringify(s.llmInsights).substring(0, 500))
           : 'No LLM insights generated',
         duration: s.duration ? `${(s.duration / 1000).toFixed(1)}s` : 'unknown',
       }));
@@ -363,8 +414,25 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
     this.activeWorkflows.set(executionId, execution);
     logger.info(`[Orchestrator] Starting workflow: ${workflowName} (${executionId})`);
 
+    // ── Fetch CloudWatch logs ONCE for the entire workflow ─────────────────
+    const logGroupName = initialData?.logGroupName;
+    const cwResult = await this._fetchWorkflowLogs(logGroupName);
+    const workflowCwMeta = cwResult?.meta || { injected: false, logCount: 0 };
+
+    if (cwResult) {
+      logger.info(`[Orchestrator] CloudWatch logs ready: ${cwResult.meta.logCount} logs from ${logGroupName}`);
+    }
+
     // ── Context pipeline — carries both initial data and inter-step intel ────
     let pipelineContext = { ...initialData };
+
+    // ── Inject CloudWatch logs into the pipeline context so every step has them ──
+    if (cwResult && cwResult.logs && cwResult.logs.length > 0) {
+      pipelineContext.logs = cwResult.logs;
+      pipelineContext._cloudwatchSource = logGroupName;
+      logger.info(`[Orchestrator] Added ${cwResult.logs.length} CW logs to pipeline context`);
+    }
+
     const contextPipeline = [];
 
     try {
@@ -395,24 +463,21 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
         const agent = this.agents.get(step.agent);
         if (!agent) throw new Error(`Agent not found: ${step.agent}`);
 
-        // ── CloudWatch log injection ───────────────────────────────────────
-        let cwMeta = { injected: false, logCount: 0 };
-        const cwResult = await this._injectCloudWatchLogs(step.agent);
-        let stepInput = pipelineContext;
-
-        if (cwResult) {
-          cwMeta = cwResult.meta;
-          stepInput = {
-            ...pipelineContext,
-            logs: cwResult.logs,
-            _cloudwatchSource: cwResult.meta.logGroup,
-          };
-          logger.info(`[Orchestrator] Injected ${cwResult.meta.logCount} CW logs into step ${step.order} (${step.agent})`);
+        // ── Build step input — logs are already in pipelineContext ──────────
+        // Re-inject logs on top to ensure they're never overwritten by step results
+        let stepInput = { ...pipelineContext };
+        if (cwResult && cwResult.logs) {
+          stepInput.logs = cwResult.logs;
+          stepInput._cloudwatchSource = logGroupName;
         }
+        logger.info(`[Orchestrator] Step ${step.order} (${step.agent}): input has ${stepInput.logs?.length || 0} logs`);
+
+        execution.steps[stepIndex].cloudwatchLogsMeta = workflowCwMeta;
 
         // ── Apply input mapping if provided ───────────────────────────────
         if (step.inputMapping) {
-          stepInput = this.applyMapping(stepInput, step.inputMapping);
+          const mapped = this.applyMapping(stepInput, step.inputMapping);
+          stepInput = { ...stepInput, ...mapped };
         }
 
         // ── Record context received from prior steps ───────────────────────
@@ -430,7 +495,6 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
             return acc;
           }, {}),
         };
-        execution.steps[stepIndex].cloudwatchLogsMeta = cwMeta;
 
         // ── Execute step with timeout ──────────────────────────────────────
         try {
@@ -450,8 +514,8 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
           execution.steps[stepIndex].duration =
             new Date() - execution.steps[stepIndex].startTime;
           execution.steps[stepIndex].llmInsights = intel.llmInsights;
-          execution.steps[stepIndex].severity    = intel.severity;
-          execution.steps[stepIndex].confidence  = intel.confidence;
+          execution.steps[stepIndex].severity = intel.severity;
+          execution.steps[stepIndex].confidence = intel.confidence;
 
           // ── Build context for next step ────────────────────────────────
           const stepKey = `step${step.order || si + 1}Result`;
@@ -528,14 +592,14 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
         : 0;
 
       // ── Finalize execution ───────────────────────────────────────────────
-      execution.status            = 'completed';
-      execution.endTime           = new Date();
-      execution.duration          = new Date() - execution.startTime;
-      execution.finalResult       = pipelineContext;
+      execution.status = 'completed';
+      execution.endTime = new Date();
+      execution.duration = new Date() - execution.startTime;
+      execution.finalResult = pipelineContext;
       execution.consolidatedInsight = consolidatedRaw;
-      execution.overallSeverity   = overallSeverity;
+      execution.overallSeverity = overallSeverity;
       execution.overallConfidence = overallConfidence;
-      execution.contextPipeline   = contextPipeline;
+      execution.contextPipeline = contextPipeline;
 
       await Workflow.findByIdAndUpdate(workflow._id, {
         $inc: { 'metrics.executionCount': 1, 'metrics.successCount': 1 },
@@ -543,7 +607,7 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
       });
 
     } catch (error) {
-      execution.status  = 'failed';
+      execution.status = 'failed';
       execution.endTime = new Date();
       execution.duration = new Date() - execution.startTime;
 
@@ -565,7 +629,7 @@ Synthesize these multi-agent results into a consolidated workflow insight.`;
         status: execution.status,
         companyId: this.companyId,
       });
-    } catch (_) {}
+    } catch (_) { }
 
     return execution;
   }

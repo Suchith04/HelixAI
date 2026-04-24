@@ -89,10 +89,14 @@ export const deleteWorkflow = async (req, res, next) => {
 
 export const executeWorkflow = async (req, res, next) => {
   try {
+    const { data = {}, logGroupName } = req.body;
+    // Include logGroupName in initialData so the orchestrator can fetch CW logs
+    const initialData = { ...data, logGroupName: logGroupName || undefined };
+
     let execution;
     try {
       const orchestrator = await getOrchestrator(req.companyId);
-      execution = await orchestrator.executeWorkflow(req.params.id, req.body.data || {}, {
+      execution = await orchestrator.executeWorkflow(req.params.id, initialData, {
         type: 'user',
         userId: req.user._id,
       });

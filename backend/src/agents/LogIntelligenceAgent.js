@@ -1,5 +1,5 @@
 import BaseAgent from './base/BaseAgent.js';
-import { LogEntry, Incident } from '../models/index.js';
+import { Incident } from '../models/index.js';
 import { extractErrorSignature } from '../utils/helpers.js';
 
 /**
@@ -9,7 +9,7 @@ import { extractErrorSignature } from '../utils/helpers.js';
 class LogIntelligenceAgent extends BaseAgent {
   constructor(orchestrator, companyId) {
     super('LogIntelligence', orchestrator, companyId);
-    
+
     this.config = {
       ...this.config,
       batchSize: 100,
@@ -63,9 +63,12 @@ Provide your analysis in JSON format with the following structure:
     return this.executeWithTracking('analyze_logs', async () => {
       const { action, data: actionData } = data;
 
-      // Helper to get logs: use provided (CloudWatch-injected) logs or fetch from DB
-      const getLogs = async (input) => {
+      // Helper to get logs: check multiple locations for CloudWatch-injected logs
+      const getLogs = (input) => {
+        // Direct array
         if (Array.isArray(input)) return input;
+
+        // Logs inside input object
         if (input?.logs && Array.isArray(input.logs)) {
           if (input._cloudwatchSource) {
             this.log(`Using ${input.logs.length} pre-processed CloudWatch logs from ${input._cloudwatchSource}`, 'info');
@@ -74,26 +77,30 @@ Provide your analysis in JSON format with the following structure:
           }
           return input.logs;
         }
-        // No logs provided — fetch recent logs from DB as fallback
-        this.log('No CloudWatch logs available, fetching recent logs from database', 'info');
-        const recentLogs = await LogEntry.find({ company: this.companyId })
-          .sort({ timestamp: -1 })
-          .limit(100)
-          .lean();
-        return recentLogs;
+
+        // Check parent data object (orchestrator passes { action, data: stepInput })
+        // stepInput has logs at top level
+        if (data?.data?.logs && Array.isArray(data.data.logs)) {
+          this.log(`Using ${data.data.logs.length} logs from workflow data`, 'info');
+          return data.data.logs;
+        }
+
+        // No logs found
+        this.log('No logs provided — please select a CloudWatch log group', 'warn');
+        return [];
       };
+
+      const logs = getLogs(actionData);
 
       switch (action) {
         case 'analyze':
-          return await this.analyzeLogs(await getLogs(actionData));
+          return await this.analyzeLogs(logs);
         case 'detect_patterns':
-          return await this.detectPatterns(await getLogs(actionData));
+          return await this.detectPatterns(logs);
         case 'extract_errors':
-          return await this.extractErrors(await getLogs(actionData));
-        case 'query':
-          return await this.queryLogs(actionData || {});
+          return await this.extractErrors(logs);
         default:
-          return await this.analyzeLogs(await getLogs(actionData));
+          return await this.analyzeLogs(logs);
       }
     });
   }
@@ -107,13 +114,13 @@ Provide your analysis in JSON format with the following structure:
 
     // Categorize logs
     const categorized = this.categorizeLogs(logs);
-    
+
     // Extract errors
     const errors = await this.extractErrors(categorized.errors);
-    
+
     // Detect patterns
     const patterns = await this.detectPatterns(logs);
-    
+
     // LLM analysis for issues, patterns, or general behavior
     let llmInsights = null;
     if (categorized.errors.length > 0 || patterns.length > 0) {
@@ -189,7 +196,7 @@ Provide your analysis in JSON format with the following structure:
 
     for (const log of logs) {
       const level = (log.level || 'info').toLowerCase();
-      
+
       if (['error', 'fatal', 'critical'].includes(level)) {
         categorized.errors.push(log);
       } else if (['warn', 'warning'].includes(level)) {
@@ -213,7 +220,7 @@ Provide your analysis in JSON format with the following structure:
 
     for (const log of logs) {
       const signature = extractErrorSignature(log.message || '');
-      
+
       if (!signatureMap.has(signature)) {
         signatureMap.set(signature, {
           signature,
@@ -244,7 +251,7 @@ Provide your analysis in JSON format with the following structure:
    */
   async detectPatterns(logs) {
     const patterns = [];
-    
+
     // Time-based patterns
     const timePatterns = this.detectTimePatterns(logs);
     patterns.push(...timePatterns);
@@ -299,7 +306,7 @@ Provide your analysis in JSON format with the following structure:
     for (const log of logs) {
       const service = log.source?.service || 'unknown';
       const level = (log.level || '').toLowerCase();
-      
+
       if (['error', 'fatal'].includes(level)) {
         serviceErrors.set(service, (serviceErrors.get(service) || 0) + 1);
       }
@@ -402,29 +409,6 @@ Provide your analysis in JSON format with the following structure:
     return 'low';
   }
 
-  /**
-   * Query logs from database
-   */
-  async queryLogs(query) {
-    const { service, level, startTime, endTime, limit = 100 } = query;
-
-    const filter = { company: this.companyId };
-    
-    if (service) filter['source.service'] = service;
-    if (level) filter.level = level;
-    if (startTime || endTime) {
-      filter.timestamp = {};
-      if (startTime) filter.timestamp.$gte = new Date(startTime);
-      if (endTime) filter.timestamp.$lte = new Date(endTime);
-    }
-
-    const logs = await LogEntry.find(filter)
-      .sort({ timestamp: -1 })
-      .limit(limit)
-      .lean();
-
-    return logs;
-  }
 }
 
 export default LogIntelligenceAgent;

@@ -3,17 +3,17 @@ name: 🚀 Deploy HelixAI to AWS
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # Manual trigger button
+  workflow_dispatch:
 
 env:
   EC2_HOST: ${{ secrets.EC2_HOST }}
   EC2_USER: ubuntu
-  EC2_KEY: ${{ secrets.EC2_SSH_KEY }}
 
 jobs:
   test:
     name: 🧪 Run Tests
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,10 +24,14 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install backend dependencies
-        run: cd backend && npm ci
+        run: |
+          cd backend
+          npm ci
 
       - name: Run backend tests
-        run: cd backend && npm test || true  # Don't fail if no tests yet
+        run: |
+          cd backend
+          npm test || true
 
   deploy:
     name: 🚀 Deploy to Production
@@ -42,34 +46,38 @@ jobs:
       - name: 🔑 Configure SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/helixai-key.pem
+
+          cat <<'EOF' > ~/.ssh/helixai-key.pem
+${{ secrets.EC2_SSH_KEY }}
+EOF
+
           chmod 600 ~/.ssh/helixai-key.pem
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
       - name: 🚀 Deploy to EC2
         run: |
-          ssh -i ~/.ssh/helixai-key.pem ubuntu@${{ secrets.EC2_HOST }} << 'DEPLOY_SCRIPT'
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/helixai-key.pem ubuntu@${{ secrets.EC2_HOST }} << 'DEPLOY_SCRIPT'
             set -e
-            
+
             echo "📂 Navigating to project..."
             cd ~/HelixAI
-            
+
             echo "📥 Pulling latest code..."
             git fetch origin main
             git reset --hard origin/main
-            
+
             echo "🐳 Building and deploying containers..."
             docker compose --env-file .env.production up -d --build --force-recreate
-            
+
             echo "🧹 Cleaning up old images..."
             docker image prune -f
-            
+
             echo "⏳ Waiting for services to be healthy..."
             sleep 15
-            
+
             echo "✅ Health check..."
             curl -f http://localhost:5000/health || echo "⚠️ Health check failed!"
-            
+
             echo "🎉 Deployment complete!"
           DEPLOY_SCRIPT
 

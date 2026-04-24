@@ -1,5 +1,5 @@
 import BaseAgent from './base/BaseAgent.js';
-import { Incident, LogEntry } from '../models/index.js';
+import { Incident } from '../models/index.js';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 class CrashDiagnosticAgent extends BaseAgent {
   constructor(orchestrator, companyId) {
     super('CrashDiagnostic', orchestrator, companyId);
-    
+
     this.knownIssues = new Map();
     this.config = {
       ...this.config,
@@ -54,23 +54,43 @@ Provide your analysis in JSON format:
       const { action, data: actionData } = data;
 
       let effectiveData = actionData || {};
-      if (!effectiveData.errors && effectiveData.logs && Array.isArray(effectiveData.logs)) {
-        const errorLogs = effectiveData.logs.filter(l => {
+
+      // Try to get logs from actionData or parent data object
+      let logsToCheck = effectiveData.logs;
+      if ((!logsToCheck || !Array.isArray(logsToCheck)) && data?.data?.logs && Array.isArray(data.data.logs)) {
+        logsToCheck = data.data.logs;
+        effectiveData = { ...effectiveData, logs: logsToCheck };
+      }
+
+      if (!effectiveData.errors && logsToCheck && Array.isArray(logsToCheck)) {
+        // First try error/fatal/critical level logs
+        let relevantLogs = logsToCheck.filter(l => {
           const level = (l.level || '').toLowerCase();
           return ['error', 'fatal', 'critical'].includes(level);
         });
-        if (errorLogs.length > 0) {
-          this.log(`Extracted ${errorLogs.length} error logs from CloudWatch for crash investigation`, 'info');
-          effectiveData = { ...effectiveData, errors: errorLogs, source: effectiveData._cloudwatchSource || 'CloudWatch' };
+
+        // If no error-level logs, also include warnings for crash investigation
+        if (relevantLogs.length === 0) {
+          relevantLogs = logsToCheck.filter(l => {
+            const level = (l.level || '').toLowerCase();
+            return ['error', 'fatal', 'critical', 'warn', 'warning'].includes(level);
+          });
+        }
+
+        if (relevantLogs.length > 0) {
+          this.log(`Extracted ${relevantLogs.length} relevant logs from CloudWatch for crash investigation`, 'info');
+          effectiveData = { ...effectiveData, errors: relevantLogs, source: effectiveData._cloudwatchSource || 'CloudWatch' };
+        } else {
+          this.log(`No error/warning logs found in ${logsToCheck.length} total logs`, 'info');
         }
       }
 
       switch (action) {
-        case 'investigate':     return await this.investigateCrashes(effectiveData);
-        case 'analyze_dump':    return await this.analyzeDump(effectiveData);
+        case 'investigate': return await this.investigateCrashes(effectiveData);
+        case 'analyze_dump': return await this.analyzeDump(effectiveData);
         case 'find_root_cause': return await this.findRootCause(effectiveData);
-        case 'correlate':       return await this.correlateErrors(effectiveData);
-        default:                return await this.investigateCrashes(effectiveData);
+        case 'correlate': return await this.correlateErrors(effectiveData);
+        default: return await this.investigateCrashes(effectiveData);
       }
     });
   }
@@ -166,8 +186,8 @@ Provide your analysis in JSON format:
       } : null,
       severity: avgConfidence > 0.8 ? 'critical' : avgConfidence > 0.5 ? 'high' : 'medium',
       action: avgConfidence > this.config.confidenceThreshold ? 'recovery_initiated'
-            : avgConfidence > this.config.escalationThreshold ? 'collaboration_requested'
-            : 'incident_created',
+        : avgConfidence > this.config.escalationThreshold ? 'collaboration_requested'
+          : 'incident_created',
     };
   }
 
@@ -282,10 +302,12 @@ Provide your analysis in JSON format:
     for (const [s1, e1] of serviceErrors) {
       for (const [s2, e2] of serviceErrors) {
         if (s1 >= s2) continue;
-        for (const a of e1) { for (const b of e2) {
-          const diff = Math.abs(new Date(a.timestamp) - new Date(b.timestamp));
-          if (diff < timeWindow) correlations.push({ service1: s1, service2: s2, timeDiff: diff, error1: a.signature, error2: b.signature });
-        }}
+        for (const a of e1) {
+          for (const b of e2) {
+            const diff = Math.abs(new Date(a.timestamp) - new Date(b.timestamp));
+            if (diff < timeWindow) correlations.push({ service1: s1, service2: s2, timeDiff: diff, error1: a.signature, error2: b.signature });
+          }
+        }
       }
     }
     return { correlations, serviceCount: serviceErrors.size, totalErrors: errors.length };

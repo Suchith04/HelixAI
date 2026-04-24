@@ -5,9 +5,9 @@ import {
   BarChart3, ArrowRight, Activity, X, Brain, Zap, ChevronRight,
   Shield, TrendingUp, Eye, Cpu, Database, RefreshCw, Layers,
   ChevronDown, Circle, AlertTriangle, Info, Sparkles, Network,
-  ArrowDownRight, Filter, ExternalLink,
+  ArrowDownRight, Filter, ExternalLink, CloudLightning,
 } from 'lucide-react';
-import { workflowService } from '../services/api';
+import { workflowService, cloudwatchService } from '../services/api';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -658,6 +658,13 @@ const Workflows = () => {
   const [executing, setExecuting] = useState(null);
   const [selectedExecId, setSelectedExecId] = useState(null);
 
+  // CloudWatch log group state
+  const [logGroups, setLogGroups] = useState([]);
+  const [selectedLogGroup, setSelectedLogGroup] = useState('');
+  const [showLogGroupDropdown, setShowLogGroupDropdown] = useState(false);
+  const [logGroupsLoading, setLogGroupsLoading] = useState(false);
+  const [cwError, setCwError] = useState('');
+
   const load = useCallback(() => {
     Promise.all([workflowService.getWorkflows(), workflowService.getExecutions()])
       .then(([wfRes, execRes]) => {
@@ -670,12 +677,28 @@ const Workflows = () => {
 
   useEffect(() => { load(); }, [load]);
 
+  // Load CloudWatch log groups
+  useEffect(() => {
+    setLogGroupsLoading(true);
+    cloudwatchService.getLogGroups()
+      .then(res => {
+        const groups = res.data.logGroups || [];
+        setLogGroups(groups);
+        if (groups.length > 0) setSelectedLogGroup(groups[0].logGroupName);
+      })
+      .catch(() => setCwError('AWS credentials not configured. Workflows cannot fetch CloudWatch logs.'))
+      .finally(() => setLogGroupsLoading(false));
+  }, []);
+
   const handleExecute = async (id, e) => {
     e.stopPropagation();
     setExecuting(id);
     setError(null);
     try {
-      const res = await workflowService.executeWorkflow(id, {});
+      const res = await workflowService.executeWorkflow(id, {
+        data: {},
+        logGroupName: selectedLogGroup || undefined,
+      });
       // Open execution detail immediately
       setSelectedExecId(res.data.execution._id);
       load();
@@ -785,6 +808,93 @@ const Workflows = () => {
               <p style={{ color: textColor, fontSize: 28, fontWeight: 800, margin: 0 }}>{value}</p>
             </div>
           ))}
+        </div>
+
+        {/* CloudWatch Log Group Selector */}
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(15,23,42,0.9), rgba(15,20,40,0.95))',
+          border: '1px solid rgba(99,102,241,0.2)',
+          borderRadius: 20, padding: 24, marginBottom: 36,
+          backdropFilter: 'blur(20px)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 12,
+              background: 'linear-gradient(135deg, rgba(99,102,241,0.3), rgba(139,92,246,0.3))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: '1px solid rgba(99,102,241,0.4)',
+            }}>
+              <CloudLightning size={20} color="#818cf8" />
+            </div>
+            <div>
+              <h3 style={{ color: '#f1f5f9', fontSize: 16, fontWeight: 700, margin: 0 }}>CloudWatch Log Source</h3>
+              <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>Select which log group all workflow agents will analyze</p>
+            </div>
+          </div>
+
+          {cwError && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '10px 16px', marginBottom: 14,
+              background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+              borderRadius: 12, color: '#fbbf24', fontSize: 13,
+            }}>
+              <Info size={15} />
+              <span>{cwError}</span>
+            </div>
+          )}
+
+          <div style={{ position: 'relative', maxWidth: 600 }}>
+            <button
+              onClick={() => setShowLogGroupDropdown(!showLogGroupDropdown)}
+              disabled={logGroupsLoading || logGroups.length === 0}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '12px 16px',
+                background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(99,102,241,0.3)',
+                borderRadius: 12, color: '#f1f5f9', fontSize: 13, cursor: 'pointer',
+                transition: 'border-color 0.2s',
+                opacity: (logGroupsLoading || logGroups.length === 0) ? 0.5 : 1,
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {logGroupsLoading ? 'Loading log groups...' : selectedLogGroup || 'No log groups available'}
+              </span>
+              <ChevronDown size={15} color="#64748b" style={{ flexShrink: 0, marginLeft: 8 }} />
+            </button>
+            {showLogGroupDropdown && logGroups.length > 0 && (
+              <div style={{
+                position: 'absolute', zIndex: 20, width: '100%', marginTop: 4,
+                background: 'rgba(15,23,42,0.98)', border: '1px solid rgba(99,102,241,0.3)',
+                borderRadius: 12, boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+                maxHeight: 260, overflowY: 'auto',
+              }}>
+                {logGroups.map((lg) => (
+                  <button
+                    key={lg.logGroupName}
+                    onClick={() => { setSelectedLogGroup(lg.logGroupName); setShowLogGroupDropdown(false); }}
+                    style={{
+                      width: '100%', textAlign: 'left', padding: '10px 16px',
+                      background: selectedLogGroup === lg.logGroupName ? 'rgba(99,102,241,0.15)' : 'transparent',
+                      border: 'none', color: selectedLogGroup === lg.logGroupName ? '#a5b4fc' : '#f1f5f9',
+                      cursor: 'pointer', fontSize: 13, transition: 'background 0.2s',
+                      borderBottom: '1px solid rgba(255,255,255,0.04)',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.1)'}
+                    onMouseLeave={e => e.currentTarget.style.background = selectedLogGroup === lg.logGroupName ? 'rgba(99,102,241,0.15)' : 'transparent'}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {lg.logGroupName}
+                    </div>
+                    <div style={{ color: '#475569', fontSize: 11 }}>
+                      {lg.retentionInDays === 'Never expire' ? 'No expiry' : `${lg.retentionInDays}d retention`}
+                      {lg.storedBytes ? ` • ${(lg.storedBytes / 1024 / 1024).toFixed(1)} MB` : ''}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Workflow Cards */}

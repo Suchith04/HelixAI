@@ -54,12 +54,17 @@ jobs:
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts || true
       
       - name: 🚀 Deploy to EC2
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/helixai-key.pem ubuntu@${{ secrets.EC2_HOST }} << 'DEPLOY_SCRIPT'
             set -e
 
             echo "📂 Navigating to project..."
             cd ~/HelixAI
+
+            echo "📥 Updating GitHub Remote to use Token..."
+            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git
 
             echo "📥 Pulling latest code..."
             git fetch origin main
